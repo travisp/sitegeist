@@ -56,6 +56,15 @@ import "./utils/i18n-extension.js";
 import "./utils/live-reload.js";
 import { tutorials } from "./tutorials.js";
 
+function schedulePostAgentEndUpdate() {
+	setTimeout(() => {
+		if (!agent) return;
+		chatPanel?.agentInterface?.requestUpdate();
+		chatPanel?.requestUpdate();
+		renderApp();
+	}, 0);
+}
+
 // Register custom message renderers
 registerNavigationRenderer();
 registerExtractImageRenderer();
@@ -404,8 +413,16 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 
 	await updateAuthLabel();
 
-	if (shouldSave) {
-		agentUnsubscribe = agent.subscribe((event: AgentEvent) => {
+	agentUnsubscribe = agent.subscribe((event: AgentEvent) => {
+		if (event.type === "message_end") {
+			agent.state.messages = agent.state.messages.slice();
+		}
+
+		if (event.type === "agent_end") {
+			schedulePostAgentEndUpdate();
+		}
+
+		if (shouldSave) {
 			const messages = agent.state.messages;
 
 			storage.settings
@@ -454,8 +471,8 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			}
 
 			renderApp();
-		});
-	}
+		}
+	});
 
 	await chatPanel.setAgent(agent, {
 		sandboxUrlProvider: () => {

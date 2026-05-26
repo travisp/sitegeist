@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Live chat rendering now updates after message events that mutate the message array in place.
+- Sidebar no longer remains visually stuck in streaming mode after `agent_end` fires before the agent clears runtime state.
+
 ## [1.0.0] - 2026-03-15
 
 ### Added

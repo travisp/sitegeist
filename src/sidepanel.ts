@@ -46,7 +46,7 @@ import { SYSTEM_PROMPT } from "./prompts/prompts.js";
 import { SitegeistAppStorage } from "./storage/app-storage.js";
 import { DebuggerTool } from "./tools/debugger.js";
 import { ExtractImageTool, registerExtractImageRenderer } from "./tools/extract-image.js";
-import { AskUserWhichElementTool, skillTool } from "./tools/index.js";
+import { AskUserWhichElementTool, ReadRawToolResultTool, skillTool } from "./tools/index.js";
 import { NativeInputEventsRuntimeProvider } from "./tools/NativeInputEventsRuntimeProvider.js";
 import { isToolNavigating, NavigateTool } from "./tools/navigate.js";
 import { createReplTool } from "./tools/repl/repl.js";
@@ -532,7 +532,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			if (!agent) return;
 			SessionCostDialog.open(agent.state.messages);
 		},
-		toolsFactory: (_agent, _agentInterface, _artifactsPanel, runtimeProvidersFactory) => {
+		toolsFactory: (agentInstance, _agentInterface, _artifactsPanel, runtimeProvidersFactory) => {
 			const navigateTool = new NavigateTool();
 			const selectElementTool = new AskUserWhichElementTool();
 
@@ -563,10 +563,13 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			const extractImageTool = new ExtractImageTool();
 			extractImageTool.windowId = currentWindowId;
 
+			const readRawToolResultTool = new ReadRawToolResultTool(() => agentInstance.state.messages);
+
 			const tools: AgentTool<any, any>[] = [
 				navigateTool,
 				selectElementTool,
 				replTool,
+				readRawToolResultTool,
 				skillTool,
 				extractDocumentTool,
 				extractImageTool,

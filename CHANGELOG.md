@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added raw REPL output compaction with a reader tool for searching or slicing omitted output without carrying full dumps in model context.
+
 ### Fixed
 
 - Live chat rendering now updates after message events that mutate the message array in place.

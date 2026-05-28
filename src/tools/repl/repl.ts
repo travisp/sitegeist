@@ -144,14 +144,52 @@ export async function executeJavaScript(
 	}
 }
 
+const REPL_LARGE_OUTPUT_THRESHOLD_CHARS = 20_000;
+const REPL_MODEL_OUTPUT_HEAD_CHARS = 6_000;
+const REPL_MODEL_OUTPUT_TAIL_CHARS = 3_000;
+
+function compactReplOutputForModel(output: string, toolCallId: string): { text: string; wasCompacted: boolean } {
+	if (output.length <= REPL_LARGE_OUTPUT_THRESHOLD_CHARS) {
+		return { text: output, wasCompacted: false };
+	}
+
+	const head = output.slice(0, REPL_MODEL_OUTPUT_HEAD_CHARS);
+	const tail = output.slice(-REPL_MODEL_OUTPUT_TAIL_CHARS);
+	const omittedChars = output.length - head.length - tail.length;
+
+	return {
+		wasCompacted: true,
+		text: `Large REPL output compacted.
+
+Full output size: ${output.length} chars.
+Tool call id: ${toolCallId}
+The full output is preserved in tool-result details for UI/session export, but it is not included in model context.
+
+Important accuracy instruction:
+Do not infer missing details from this preview. If exact data, selectors, rows, or DOM structure matter, run a narrower REPL query that extracts only the needed fields.
+
+--- BEGIN OUTPUT PREVIEW: FIRST ${head.length} CHARS ---
+${head}
+--- END FIRST PREVIEW ---
+
+--- OMITTED ${omittedChars} CHARS ---
+
+--- BEGIN OUTPUT PREVIEW: LAST ${tail.length} CHARS ---
+${tail}
+--- END LAST PREVIEW ---`,
+	};
+}
+
 export type ReplToolResult = {
 	files?:
 		| {
 				fileName: string;
 				contentBase64: string;
 				mimeType: string;
+				size: number;
 		  }[]
 		| undefined;
+	rawOutput?: string;
 };
 
 const replSchema = Type.Object({
@@ -165,7 +203,7 @@ const replSchema = Type.Object({
 export type ReplParams = Static<typeof replSchema>;
 
 interface ReplResult {
-	output?: string;
+	rawOutput?: string;
 	files?: Array<{
 		fileName: string;
 		mimeType: string;
@@ -197,7 +235,7 @@ export function createReplTool(): AgentTool<typeof replSchema, ReplToolResult> &
 			return REPL_TOOL_DESCRIPTION(runtimeProviderDescriptions);
 		},
 		parameters: replSchema,
-		execute: async function (_toolCallId: string, args: Static<typeof replSchema>, signal?: AbortSignal) {
+		execute: async function (toolCallId: string, args: Static<typeof replSchema>, signal?: AbortSignal) {
 			const result = await executeJavaScript(
 				args.code,
 				this.runtimeProvidersFactory?.() ?? [],
@@ -245,7 +283,15 @@ export function createReplTool(): AgentTool<typeof replSchema, ReplToolResult> &
 					contentBase64: base64,
 				};
 			});
-			return { content: [{ type: "text", text: result.output }], details: { files } };
+			const modelOutput = compactReplOutputForModel(result.output, toolCallId);
+
+			return {
+				content: [{ type: "text", text: modelOutput.text }],
+				details: {
+					files,
+					rawOutput: modelOutput.wasCompacted ? result.output : undefined,
+				},
+			};
 		},
 	};
 	return tool;
@@ -269,7 +315,9 @@ export const javascriptReplRenderer: ToolRenderer<ReplParams, ReplResult> = {
 
 		// With result: show params + result
 		if (result && params) {
-			const output = result.content.find((c) => c.type === "text")?.text || "";
+			const modelOutput = result.content.find((c) => c.type === "text")?.text || "";
+			const rawOutput = result.details?.rawOutput;
+			const output = rawOutput ?? modelOutput;
 			const files = result.details?.files || [];
 
 			const attachments: Attachment[] = files.map((f, i) => {
@@ -307,6 +355,13 @@ export const javascriptReplRenderer: ToolRenderer<ReplParams, ReplResult> = {
 						${renderCollapsibleHeader(state, Code, params.title ? params.title : "Executing JavaScript", codeContentRef, codeChevronRef, false)}
 						<div ${ref(codeContentRef)} class="max-h-0 overflow-hidden transition-all duration-300 space-y-3">
 							<code-block .code=${params.code || ""} language="javascript"></code-block>
+							${
+								rawOutput
+									? html`<div class="text-xs text-muted-foreground">
+										Model context received a compact preview. Full output shown below for UI/debug.
+									  </div>`
+									: ""
+							}
 							${output ? html`<console-block .content=${output} .variant=${result.isError ? "error" : "default"}></console-block>` : ""}
 						</div>
 						${

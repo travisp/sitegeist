@@ -48,7 +48,7 @@ import { SYSTEM_PROMPT } from "./prompts/prompts.js";
 import { SitegeistAppStorage } from "./storage/app-storage.js";
 import { DebuggerTool } from "./tools/debugger.js";
 import { ExtractImageTool, registerExtractImageRenderer } from "./tools/extract-image.js";
-import { AskUserWhichElementTool, ReadRawToolResultTool, skillTool } from "./tools/index.js";
+import { AskUserWhichElementTool, ReadRawToolResultTool, ResearchPageTool, skillTool } from "./tools/index.js";
 import { NativeInputEventsRuntimeProvider } from "./tools/NativeInputEventsRuntimeProvider.js";
 import { isToolNavigating, NavigateTool } from "./tools/navigate.js";
 import { createReplTool } from "./tools/repl/repl.js";
@@ -212,6 +212,18 @@ async function updateAuthLabel() {
 	} else {
 		authLabel = "api key";
 	}
+}
+
+async function getEnabledProxyUrl(): Promise<string | undefined> {
+	const enabled = await storage.settings.get<boolean>("proxy.enabled");
+	if (!enabled) return undefined;
+	return (await storage.settings.get<string>("proxy.url")) || undefined;
+}
+
+async function getApiKeyForProvider(provider: string): Promise<string | undefined> {
+	const stored = await storage.providerKeys.get(provider);
+	if (!stored) return undefined;
+	return resolveApiKey(stored, provider, storage.providerKeys, await getEnabledProxyUrl());
 }
 
 // Export getter for message transformer
@@ -389,6 +401,8 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 		defaultModel = getModel("anthropic", "claude-sonnet-4-6");
 	}
 
+	const streamFn = createStreamFn(getEnabledProxyUrl);
+
 	agent = new Agent({
 		initialState: initialState || {
 			systemPrompt: SYSTEM_PROMPT,
@@ -399,18 +413,8 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 		},
 		convertToLlm: browserMessageTransformer,
 		toolExecution: "sequential",
-		streamFn: createStreamFn(async () => {
-			const enabled = await storage.settings.get<boolean>("proxy.enabled");
-			if (!enabled) return undefined;
-			return (await storage.settings.get<string>("proxy.url")) || undefined;
-		}),
-		getApiKey: async (provider: string) => {
-			const stored = await storage.providerKeys.get(provider);
-			if (!stored) return undefined;
-			const proxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
-			const proxyUrl = proxyEnabled ? (await storage.settings.get<string>("proxy.url")) || undefined : undefined;
-			return resolveApiKey(stored, provider, storage.providerKeys, proxyUrl);
-		},
+		streamFn,
+		getApiKey: getApiKeyForProvider,
 	});
 
 	await updateAuthLabel();
@@ -566,12 +570,14 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			extractImageTool.windowId = currentWindowId;
 
 			const readRawToolResultTool = new ReadRawToolResultTool(() => agentInstance.state.messages);
+			const researchPageTool = new ResearchPageTool(() => agentInstance.state.model, getApiKeyForProvider, streamFn);
 
 			const tools: AgentTool<any, any>[] = [
 				navigateTool,
 				selectElementTool,
 				replTool,
 				readRawToolResultTool,
+				researchPageTool,
 				skillTool,
 				extractDocumentTool,
 				extractImageTool,

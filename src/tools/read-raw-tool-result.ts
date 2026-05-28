@@ -10,16 +10,16 @@ import {
 import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Search } from "lucide";
-import type { ReplToolResult } from "./repl/repl.js";
 
 const DEFAULT_LIMIT_CHARS = 10_000;
 const MAX_LIMIT_CHARS = 20_000;
 const SEARCH_SNIPPET_RADIUS_CHARS = 500;
+const RAW_OUTPUT_TOOL_NAMES = new Set(["repl", "research_page"]);
 
 const readRawToolResultSchema = Type.Object({
 	toolCallId: Type.Optional(
 		Type.String({
-			description: "Tool call id to read. If omitted, reads the most recent compacted raw tool result.",
+			description: "Tool call id to read. If omitted, reads the most recent raw tool output.",
 		}),
 	),
 	query: Type.Optional(
@@ -42,6 +42,10 @@ const readRawToolResultSchema = Type.Object({
 
 export type ReadRawToolResultParams = Static<typeof readRawToolResultSchema>;
 
+type RawOutputDetails = {
+	rawOutput?: string;
+};
+
 type RawOutputCandidate = {
 	toolCallId: string;
 	toolName: string;
@@ -56,14 +60,16 @@ export type ReadRawToolResultDetails = {
 
 function getRawOutputCandidate(message: AgentMessage): RawOutputCandidate | undefined {
 	if (message.role !== "toolResult") return undefined;
+	if (!RAW_OUTPUT_TOOL_NAMES.has(message.toolName)) return undefined;
 
-	const toolResult = message as ToolResultMessage<ReplToolResult>;
-	if (toolResult.toolName !== "repl" || !toolResult.details?.rawOutput) return undefined;
+	const toolResult = message as ToolResultMessage<RawOutputDetails>;
+	const rawOutput = toolResult.details?.rawOutput;
+	if (!rawOutput) return undefined;
 
 	return {
 		toolCallId: toolResult.toolCallId,
 		toolName: toolResult.toolName,
-		rawOutput: toolResult.details.rawOutput,
+		rawOutput,
 	};
 }
 
@@ -133,17 +139,17 @@ ${snippets.length > 0 ? snippets.join("\n\n") : "No matches found."}`;
 export class ReadRawToolResultTool implements AgentTool<typeof readRawToolResultSchema, ReadRawToolResultDetails> {
 	label = "Read Raw Tool Result";
 	name = "read_raw_tool_result";
-	description = `Read or search the full raw output from a previous compacted REPL result.
+	description = `Read or search raw preserved output from a previous compacted REPL result or page research transcript.
 
-Use this when a REPL result said "Large REPL output compacted" and the preview is not enough for accurate work.
+Use this when a REPL result said "Large REPL output compacted" or a page research result needs internal transcript inspection for accurate work.
 
 Inputs:
-- toolCallId: tool call id from the compacted result. If omitted, uses the most recent compacted raw output.
+- toolCallId: tool call id from the raw-output result. If omitted, uses the most recent readable raw output.
 - query: optional case-insensitive literal search query.
 - offset: character offset for slice mode or search start.
 - limit: maximum returned characters, capped at 20000.
 
-Accuracy rule: use this tool to inspect omitted raw output instead of guessing from a compact preview.`;
+Accuracy rule: use this tool to inspect omitted raw output or page research transcripts instead of guessing from compact model-facing content.`;
 	parameters = readRawToolResultSchema;
 
 	constructor(private readonly getMessages: () => AgentMessage[]) {}
@@ -161,7 +167,7 @@ Accuracy rule: use this tool to inspect omitted raw output instead of guessing f
 		const candidate = findRawOutput(this.getMessages(), args.toolCallId);
 		if (!candidate) {
 			const target = args.toolCallId ? ` for toolCallId ${JSON.stringify(args.toolCallId)}` : "";
-			throw new Error(`No compacted raw tool output found${target}.`);
+			throw new Error(`No raw tool output found${target}.`);
 		}
 
 		const limit = clampLimit(args.limit);

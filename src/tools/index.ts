@@ -17,4 +17,5 @@ export { AskUserWhichElementTool, askUserWhichElementTool } from "./ask-user-whi
 export { ReadRawToolResultTool } from "./read-raw-tool-result.js";
 export { createReplTool, javascriptReplTool } from "./repl/repl.js";
 export { requestUserScriptsPermission } from "./repl/userscripts-helpers.js";
+export { ResearchPageTool } from "./research-page.js";
 export { skillTool } from "./skill.js";

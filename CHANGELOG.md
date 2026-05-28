@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added a page research tool for asking focused questions about current-page mechanics without carrying full snapshots in model context.
 - Added raw REPL output compaction with a reader tool for searching or slicing omitted output without carrying full dumps in model context.
 - Added an estimated current context usage indicator to the sidebar footer.
 

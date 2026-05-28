@@ -5,6 +5,7 @@
 ### Added
 
 - Added raw REPL output compaction with a reader tool for searching or slicing omitted output without carrying full dumps in model context.
+- Added an estimated current context usage indicator to the sidebar footer.
 
 ### Fixed
 

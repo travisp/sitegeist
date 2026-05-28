@@ -8,12 +8,14 @@ import {
 	type AgentMessage,
 	type AgentState,
 	type AgentTool,
+	estimateContextTokens,
 } from "@earendil-works/pi-agent-core";
 import { getModel, getModels, type Model } from "@earendil-works/pi-ai";
 import {
 	ChatPanel,
 	createExtractDocumentTool,
 	createStreamFn,
+	formatTokenCount,
 	ModelSelector,
 	ProxyTab,
 	SettingsDialog,
@@ -625,6 +627,22 @@ const newSession = () => {
 // ============================================================================
 // RENDER
 // ============================================================================
+function renderContextUsage() {
+	if (!agent) return "";
+
+	const { contextWindow } = agent.state.model;
+	const { tokens } = estimateContextTokens(agent.state.messages);
+	const percent = (tokens / contextWindow) * 100;
+	const colorClass = percent > 90 ? "text-destructive" : percent > 70 ? "text-warning" : "text-muted-foreground";
+	const title = `Estimated current context if you send now: ${tokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`;
+
+	return html`
+		<div class="shrink-0 px-3 pb-1 text-xs flex justify-end">
+			<span class=${colorClass} title=${title}>Ctx ${percent.toFixed(1)}%/${formatTokenCount(contextWindow)}</span>
+		</div>
+	`;
+}
+
 const renderApp = () => {
 	const appHtml = html`
 		<div class="w-full h-full flex flex-col bg-background text-foreground overflow-hidden">
@@ -734,7 +752,8 @@ const renderApp = () => {
 			</div>
 
 			<!-- Chat Panel -->
-			${chatPanel}
+			<div class="flex-1 min-h-0">${chatPanel}</div>
+			${renderContextUsage()}
 		</div>
 	`;
 

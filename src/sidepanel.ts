@@ -10,18 +10,20 @@ import {
 	type AgentTool,
 	estimateContextTokens,
 } from "@earendil-works/pi-agent-core";
-import { getModel, getModels, type Model } from "@earendil-works/pi-ai";
+import { getModel, getModels, type Model, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
 import {
 	ChatPanel,
 	createExtractDocumentTool,
 	createStreamFn,
 	formatTokenCount,
+	isUserMessageWithAttachments,
 	ModelSelector,
 	ProxyTab,
 	SettingsDialog,
 	// PersistentStorageDialog,
 	setAppStorage,
 	setShowJsonMode,
+	type UserMessageWithAttachments,
 } from "@earendil-works/pi-web-ui";
 import { html, render } from "lit";
 import { History, Plus, Settings } from "lucide";
@@ -234,21 +236,23 @@ export function getShownSkills(): Map<string, string> {
 // ============================================================================
 // HELPERS
 // ============================================================================
+type UserLikeMessage = UserMessage | UserMessageWithAttachments;
+
+const isUserMessage = (message: AgentMessage): message is UserLikeMessage =>
+	message.role === "user" || isUserMessageWithAttachments(message);
+
+const getMessageText = (message: UserLikeMessage | undefined): string => {
+	if (!message) return "";
+	const { content } = message;
+	if (typeof content === "string") return content;
+	return content
+		.filter((c): c is TextContent => c.type === "text")
+		.map((c) => c.text)
+		.join(" ");
+};
+
 const generateTitle = (messages: AgentMessage[]): string => {
-	const firstUserMsg = messages.find((m) => m.role === "user");
-	if (!firstUserMsg || firstUserMsg.role !== "user") return "";
-
-	let text = "";
-	const content = firstUserMsg.content;
-
-	if (typeof content === "string") {
-		text = content;
-	} else {
-		const textBlocks = content.filter((c) => c.type === "text");
-		text = textBlocks.map((c) => c.text || "").join(" ");
-	}
-
-	text = text.trim();
+	const text = getMessageText(messages.find(isUserMessage)).trim();
 	if (!text) return "";
 
 	const sentenceEnd = text.search(/[.!?]/);
@@ -259,7 +263,7 @@ const generateTitle = (messages: AgentMessage[]): string => {
 };
 
 const shouldSaveSession = (messages: AgentMessage[]): boolean => {
-	const hasUserMsg = messages.some((m: AgentMessage) => m.role === "user");
+	const hasUserMsg = messages.some(isUserMessage);
 	const hasAssistantMsg = messages.some((m: AgentMessage) => m.role === "assistant");
 	return hasUserMsg && hasAssistantMsg;
 };
@@ -302,15 +306,8 @@ const saveSession = async () => {
 		let preview = "";
 		for (const msg of state.messages) {
 			if (preview.length >= 2048) break;
-			if (msg.role === "user") {
-				const text =
-					typeof msg.content === "string"
-						? msg.content
-						: msg.content
-								.filter((c) => c.type === "text")
-								.map((c) => c.text)
-								.join("\n") || "";
-				preview += `${text}\n`;
+			if (isUserMessage(msg)) {
+				preview += `${getMessageText(msg)}\n`;
 			} else if (msg.role === "assistant") {
 				const text = msg.content
 					.filter((c) => c.type === "text" || c.type === "thinking")
@@ -599,14 +596,14 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 
 		// Only disable auto-scroll for new sessions with welcome message
 		// Check if this is a fresh session (only has welcome message, no user messages)
-		const hasUserMessage = agent.state.messages.some((m) => m.role === "user");
+		const hasUserMessage = agent.state.messages.some(isUserMessage);
 		if (!hasUserMessage) {
 			chatPanel.agentInterface.setAutoScroll(false);
 
 			// Re-enable auto-scroll on first user message
 			let unsubscribe: (() => void) | undefined;
 			unsubscribe = agent.subscribe(() => {
-				const hasUserMsg = agent.state.messages.some((m) => m.role === "user");
+				const hasUserMsg = agent.state.messages.some(isUserMessage);
 				if (hasUserMsg && unsubscribe) {
 					chatPanel.agentInterface?.setAutoScroll(true);
 					unsubscribe();

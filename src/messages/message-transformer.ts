@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Message } from "@earendil-works/pi-ai";
+import { defaultConvertToLlm } from "@earendil-works/pi-web-ui";
 import type { NavigationMessage } from "./NavigationMessage.js";
 
 // Helper: Check if a message has toolCall blocks
@@ -75,19 +76,9 @@ function reorderMessages(messages: Message[]): Message[] {
 // Custom message transformer for browser extension
 // Handles navigation messages and app-specific message types
 export async function browserMessageTransformer(messages: AgentMessage[]): Promise<Message[]> {
-	const transformed = [];
+	const transformed: Message[] = [];
 
 	for (const m of messages) {
-		// Filter out UI-only messages
-		if (m.role === "artifact" || m.role === "welcome") {
-			continue;
-		}
-
-		// Filter non-LLM messages
-		if (m.role !== "user" && m.role !== "assistant" && m.role !== "toolResult" && m.role !== "navigation") {
-			continue;
-		}
-
 		if (m.role === "navigation") {
 			const nav = m as NavigationMessage;
 			const tabInfo = nav.tabId !== undefined ? ` (tab id: ${nav.tabId})` : "";
@@ -111,11 +102,8 @@ ${skillsInfo}
 - DO NOT REPEAT THIS MESSAGE BACK TO THE USER!
 </instructions>`,
 			} as Message);
-		} else if (m.role === "user") {
-			const { attachments, ...rest } = m as any;
-			transformed.push(rest as Message);
 		} else {
-			transformed.push(m as Message);
+			transformed.push(...defaultConvertToLlm([m]));
 		}
 	}
 

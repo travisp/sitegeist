@@ -1,6 +1,6 @@
 import type { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentInterface, MessageRenderer } from "@earendil-works/pi-web-ui";
-import { registerMessageRenderer } from "@earendil-works/pi-web-ui";
+import { isUserMessageWithAttachments, registerMessageRenderer } from "@earendil-works/pi-web-ui";
 import { html, LitElement, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import "../components/OrbAnimation.js";
@@ -105,7 +105,9 @@ export function createWelcomeRenderer(agent: Agent, agentInterface: AgentInterfa
 	return {
 		render: (message) => {
 			// Only show if no conversation started yet
-			const hasConversation = agent.state.messages.some((m) => m.role === "user" || m.role === "assistant");
+			const hasConversation = agent.state.messages.some(
+				(m) => m.role === "user" || isUserMessageWithAttachments(m) || m.role === "assistant",
+			);
 
 			if (hasConversation) return html``;
 

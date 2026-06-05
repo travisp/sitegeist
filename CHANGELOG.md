@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Markdown and other file attachments now reach the model in Sitegeist's custom message transformer.
 - Live chat rendering now updates after message events that mutate the message array in place.
 - Sidebar no longer remains visually stuck in streaming mode after `agent_end` fires before the agent clears runtime state.
 

@@ -75,7 +75,7 @@ export class ApiKeyOrOAuthDialog extends DialogBase {
 		try {
 			const storage = getAppStorage();
 
-			const credentials = await oauthLogin(this.provider as OAuthProviderId, undefined, (info) => {
+			const credentials = await oauthLogin(this.provider as OAuthProviderId, (info) => {
 				this.deviceCode = info.userCode;
 				this.requestUpdate();
 			});

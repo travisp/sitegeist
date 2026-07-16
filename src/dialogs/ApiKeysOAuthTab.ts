@@ -1,4 +1,4 @@
-import { getProviders } from "@earendil-works/pi-ai";
+import { getProviders } from "@earendil-works/pi-ai/compat";
 import { getAppStorage, SettingsTab } from "@earendil-works/pi-web-ui";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { html, type TemplateResult } from "lit";
@@ -12,14 +12,7 @@ import {
 	serializeOAuthCredentials,
 } from "../oauth/index.js";
 
-const OAUTH_PROVIDERS: OAuthProviderId[] = ["anthropic", "openai-codex", "github-copilot", "google-gemini-cli"];
-
-const PROVIDER_KEY_MAP: Record<OAuthProviderId, string> = {
-	anthropic: "anthropic",
-	"openai-codex": "openai-codex",
-	"github-copilot": "github-copilot",
-	"google-gemini-cli": "google-gemini-cli",
-};
+const OAUTH_PROVIDERS: OAuthProviderId[] = ["anthropic", "openai-codex", "github-copilot"];
 
 // Providers to hide from the API key list (OAuth-only or irrelevant for browser use)
 const HIDDEN_PROVIDERS = new Set([
@@ -29,7 +22,6 @@ const HIDDEN_PROVIDERS = new Set([
 	"google-antigravity",
 	"google-vertex",
 	"openai-codex",
-	"google-gemini-cli",
 	"opencode",
 	"opencode-go",
 	"kimi-coding",
@@ -52,8 +44,7 @@ export class ApiKeysOAuthTab extends SettingsTab {
 	private async loadOAuthStatuses() {
 		const storage = getAppStorage();
 		for (const provider of OAUTH_PROVIDERS) {
-			const key = PROVIDER_KEY_MAP[provider];
-			const stored = await storage.providerKeys.get(key);
+			const stored = await storage.providerKeys.get(provider);
 			if (stored && isOAuthCredentials(stored)) {
 				const creds = parseOAuthCredentials(stored);
 				const expired = Date.now() >= creds.expires;
@@ -74,13 +65,12 @@ export class ApiKeysOAuthTab extends SettingsTab {
 		try {
 			const storage = getAppStorage();
 
-			const credentials = await oauthLogin(provider, undefined, (info) => {
+			const credentials = await oauthLogin(provider, (info) => {
 				this.deviceCode = info.userCode;
 				this.requestUpdate();
 			});
 
-			const key = PROVIDER_KEY_MAP[provider];
-			await storage.providerKeys.set(key, serializeOAuthCredentials(credentials));
+			await storage.providerKeys.set(provider, serializeOAuthCredentials(credentials));
 
 			this.oauthStatuses[provider] = "logged-in";
 			this.deviceCode = null;
@@ -96,8 +86,7 @@ export class ApiKeysOAuthTab extends SettingsTab {
 
 	private async handleLogout(provider: OAuthProviderId) {
 		const storage = getAppStorage();
-		const key = PROVIDER_KEY_MAP[provider];
-		await storage.providerKeys.delete(key);
+		await storage.providerKeys.delete(provider);
 		this.oauthStatuses[provider] = "none";
 		this.oauthErrors[provider] = "";
 		this.requestUpdate();

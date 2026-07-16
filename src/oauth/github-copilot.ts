@@ -6,10 +6,13 @@
  * declarativeNetRequest rules in the manifest.
  */
 
-import type { OAuthCredentials } from "./types.js";
+import type { DeviceCodeCallback, OAuthCredentials } from "./types.js";
 
 const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("SXYxLmI1MDdhMDhjODdlY2ZlOTg=");
+const DEVICE_CODE_URL = "https://github.com/login/device/code";
+const ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
 const COPILOT_HEADERS = {
 	"User-Agent": "GitHubCopilotChat/0.35.0",
@@ -26,50 +29,21 @@ interface DeviceCodeResponse {
 	expires_in: number;
 }
 
-function getUrls(domain: string) {
-	return {
-		deviceCodeUrl: `https://${domain}/login/device/code`,
-		accessTokenUrl: `https://${domain}/login/oauth/access_token`,
-		copilotTokenUrl: `https://api.${domain}/copilot_internal/v2/token`,
-	};
-}
-
-/**
- * Parse the proxy-ep from a Copilot token to get the API base URL.
- */
-function getBaseUrlFromToken(token: string): string | null {
-	const match = token.match(/proxy-ep=([^;]+)/);
-	if (!match) return null;
-	const apiHost = match[1].replace(/^proxy\./, "api.");
-	return `https://${apiHost}`;
-}
-
-export function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
-	if (token) {
-		const urlFromToken = getBaseUrlFromToken(token);
-		if (urlFromToken) return urlFromToken;
-	}
-	if (enterpriseDomain) return `https://copilot-api.${enterpriseDomain}`;
-	return "https://api.individual.githubcopilot.com";
-}
-
-async function postJson(url: string, body: string, headers: Record<string, string>): Promise<any> {
+async function postJson(url: string, body: string, headers: Record<string, string>): Promise<Record<string, unknown>> {
 	const response = await fetch(url, {
 		method: "POST",
 		headers,
 		body,
 	});
 	if (!response.ok) {
-		const text = await response.text().catch(() => "");
-		throw new Error(`${response.status}: ${text}`);
+		throw new Error(`${response.status}: ${await response.text()}`);
 	}
-	return response.json();
+	return response.json() as Promise<Record<string, unknown>>;
 }
 
-async function startDeviceFlow(domain: string): Promise<DeviceCodeResponse> {
-	const urls = getUrls(domain);
+async function startDeviceFlow(): Promise<DeviceCodeResponse> {
 	const data = await postJson(
-		urls.deviceCodeUrl,
+		DEVICE_CODE_URL,
 		new URLSearchParams({
 			client_id: CLIENT_ID,
 			scope: "read:user",
@@ -91,16 +65,20 @@ async function startDeviceFlow(domain: string): Promise<DeviceCodeResponse> {
 		throw new Error("Invalid device code response");
 	}
 
-	return data as DeviceCodeResponse;
+	return {
+		device_code: data.device_code,
+		user_code: data.user_code,
+		verification_uri: data.verification_uri,
+		interval: data.interval,
+		expires_in: data.expires_in,
+	};
 }
 
 async function pollForGitHubAccessToken(
-	domain: string,
 	deviceCode: string,
 	intervalSeconds: number,
 	expiresIn: number,
 ): Promise<string> {
-	const urls = getUrls(domain);
 	const deadline = Date.now() + expiresIn * 1000;
 	let intervalMs = Math.max(1000, intervalSeconds * 1000);
 
@@ -108,7 +86,7 @@ async function pollForGitHubAccessToken(
 		await new Promise((r) => setTimeout(r, intervalMs));
 
 		const data = await postJson(
-			urls.accessTokenUrl,
+			ACCESS_TOKEN_URL,
 			new URLSearchParams({
 				client_id: CLIENT_ID,
 				device_code: deviceCode,
@@ -144,11 +122,9 @@ async function pollForGitHubAccessToken(
 	throw new Error("Device flow timed out");
 }
 
-async function fetchCopilotToken(githubAccessToken: string, domain: string): Promise<OAuthCredentials> {
-	const urls = getUrls(domain);
-
+async function fetchCopilotToken(githubAccessToken: string): Promise<OAuthCredentials> {
 	// api.github.com has CORS enabled, no proxy needed
-	const response = await fetch(urls.copilotTokenUrl, {
+	const response = await fetch(COPILOT_TOKEN_URL, {
 		headers: {
 			Accept: "application/json",
 			Authorization: `Bearer ${githubAccessToken}`,
@@ -157,11 +133,10 @@ async function fetchCopilotToken(githubAccessToken: string, domain: string): Pro
 	});
 
 	if (!response.ok) {
-		const text = await response.text().catch(() => "");
-		throw new Error(`Copilot token request failed: ${response.status} ${text}`);
+		throw new Error(`Copilot token request failed: ${response.status} ${await response.text()}`);
 	}
 
-	const data = await response.json();
+	const data = (await response.json()) as Record<string, unknown>;
 
 	if (typeof data.token !== "string" || typeof data.expires_at !== "number") {
 		throw new Error("Invalid Copilot token response");
@@ -181,12 +156,8 @@ async function fetchCopilotToken(githubAccessToken: string, domain: string): Pro
  * Returns a callback with the user code and verification URL.
  * The caller should display these to the user and open the verification URL.
  */
-export async function loginGitHubCopilot(
-	onDeviceCode: (info: { userCode: string; verificationUri: string }) => void,
-): Promise<OAuthCredentials> {
-	const domain = "github.com";
-
-	const device = await startDeviceFlow(domain);
+export async function loginGitHubCopilot(onDeviceCode: DeviceCodeCallback): Promise<OAuthCredentials> {
+	const device = await startDeviceFlow();
 
 	onDeviceCode({
 		userCode: device.user_code,
@@ -196,14 +167,9 @@ export async function loginGitHubCopilot(
 	// Open the verification URL in a new tab
 	chrome.tabs.create({ url: device.verification_uri, active: true });
 
-	const githubAccessToken = await pollForGitHubAccessToken(
-		domain,
-		device.device_code,
-		device.interval,
-		device.expires_in,
-	);
+	const githubAccessToken = await pollForGitHubAccessToken(device.device_code, device.interval, device.expires_in);
 
-	return fetchCopilotToken(githubAccessToken, domain);
+	return fetchCopilotToken(githubAccessToken);
 }
 
 /**
@@ -212,6 +178,5 @@ export async function loginGitHubCopilot(
  * api.github.com has CORS enabled, no proxy needed.
  */
 export async function refreshGitHubCopilot(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-	const domain = "github.com";
-	return fetchCopilotToken(credentials.refresh, domain);
+	return fetchCopilotToken(credentials.refresh);
 }

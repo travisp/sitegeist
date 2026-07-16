@@ -5,7 +5,7 @@
  * 1. Open the auth URL in a new tab
  * 2. Watch for the tab to redirect to localhost (which fails to load)
  * 3. Extract code/state from the URL
- * 4. Exchange the code for tokens via fetch (direct or proxied)
+ * 4. Exchange the code for tokens via fetch
  */
 
 /**
@@ -28,14 +28,11 @@ export async function waitForOAuthRedirect(authUrl: string, redirectHost: string
 				return;
 			}
 
-			// Check if we hit the localhost redirect
-			if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-				if (url.host === redirectHost || url.hostname === new URL(`http://${redirectHost}`).hostname) {
-					cleanup();
-					chrome.tabs.remove(tabId).catch(() => {});
-					resolve(url);
-				}
-			}
+			if (url.host !== redirectHost) return;
+
+			cleanup();
+			chrome.tabs.remove(tabId).catch(() => {});
+			resolve(url);
 		};
 
 		const onRemoved = (removedTabId: number) => {
@@ -87,24 +84,17 @@ function base64urlEncode(bytes: Uint8Array): string {
 }
 
 /**
- * Post JSON to a URL, optionally through a CORS proxy.
+ * Post a JSON token request.
  */
-export async function postTokenRequest(
-	url: string,
-	body: Record<string, string>,
-	proxyUrl?: string,
-): Promise<Record<string, unknown>> {
-	const targetUrl = proxyUrl ? `${proxyUrl}/?url=${encodeURIComponent(url)}` : url;
-
-	const response = await fetch(targetUrl, {
+export async function postTokenRequest(url: string, body: Record<string, string>): Promise<Record<string, unknown>> {
+	const response = await fetch(url, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
 	});
 
 	if (!response.ok) {
-		const text = await response.text().catch(() => "");
-		throw new Error(`Token request failed: ${response.status} ${text}`);
+		throw new Error(`Token request failed: ${response.status} ${await response.text()}`);
 	}
 
 	return response.json();

@@ -10,7 +10,8 @@ import {
 	type AgentTool,
 	estimateContextTokens,
 } from "@earendil-works/pi-agent-core";
-import { getModel, getModels, type Model, type TextContent, type UserMessage } from "@earendil-works/pi-ai";
+import type { Model, TextContent, UserMessage } from "@earendil-works/pi-ai";
+import { getModel, getModels } from "@earendil-works/pi-ai/compat";
 import {
 	ChatPanel,
 	createExtractDocumentTool,
@@ -126,7 +127,6 @@ const DEFAULT_MODELS: Record<string, string> = {
 	"github-copilot": "gpt-4o",
 	google: "gemini-2.5-flash",
 	"google-antigravity": "gemini-3.1-pro-high",
-	"google-gemini-cli": "gemini-2.5-pro",
 	"google-vertex": "gemini-3-pro-preview",
 	groq: "openai/gpt-oss-20b",
 	huggingface: "moonshotai/Kimi-K2.5",
@@ -225,7 +225,7 @@ async function getEnabledProxyUrl(): Promise<string | undefined> {
 async function getApiKeyForProvider(provider: string): Promise<string | undefined> {
 	const stored = await storage.providerKeys.get(provider);
 	if (!stored) return undefined;
-	return resolveApiKey(stored, provider, storage.providerKeys, await getEnabledProxyUrl());
+	return resolveApiKey(stored, provider, storage.providerKeys);
 }
 
 // Export getter for message transformer
@@ -372,7 +372,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 	const corsProxyEnabled = await storage.settings.get<boolean>("proxy.enabled");
 	const corsProxyUrl = await storage.settings.get<string>("proxy.url");
 
-	// Determine default model: saved > default for a provider with key > gemini flash fallback
+	// Determine default model: saved > default for a provider with key > Anthropic fallback
 	let defaultModel: Model<any> | undefined;
 	if (!initialState?.model) {
 		const savedModel = await storage.settings.get<Model<any>>("lastUsedModel");
@@ -393,7 +393,6 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			}
 		}
 	}
-	// Final fallback
 	if (!defaultModel && !initialState?.model) {
 		defaultModel = getModel("anthropic", "claude-sonnet-4-6");
 	}

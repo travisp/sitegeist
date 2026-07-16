@@ -8,11 +8,19 @@
 - Added raw REPL output compaction with a reader tool for searching or slicing omitted output without carrying full dumps in model context.
 - Added an estimated current context usage indicator to the sidebar footer.
 
+### Changed
+
+- Upgraded the pi runtime packages to 0.80.8 while retaining pi-web-ui 0.75.3 through pi-ai's compatibility entry point.
+
 ### Fixed
 
 - Markdown and other file attachments now reach the model in Sitegeist's custom message transformer.
 - Live chat rendering now updates after message events that mutate the message array in place.
 - Sidebar no longer remains visually stuck in streaming mode after `agent_end` fires before the agent clears runtime state.
+
+### Removed
+
+- Removed Google Gemini CLI subscription OAuth. Google Gemini remains available through API-key authentication.
 
 ## [1.0.0] - 2026-03-15
 

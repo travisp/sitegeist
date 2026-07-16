@@ -14,24 +14,6 @@ const TOKEN_URL = "https://auth.openai.com/oauth/token";
 const REDIRECT_URI = "http://localhost:1455/auth/callback";
 const REDIRECT_HOST = "localhost:1455";
 const SCOPE = "openid profile email offline_access";
-const JWT_CLAIM_PATH = "https://api.openai.com/auth";
-
-function decodeJwt(token: string): Record<string, unknown> | null {
-	try {
-		const parts = token.split(".");
-		if (parts.length !== 3) return null;
-		return JSON.parse(atob(parts[1]));
-	} catch {
-		return null;
-	}
-}
-
-function getAccountId(accessToken: string): string | null {
-	const payload = decodeJwt(accessToken);
-	const auth = payload?.[JWT_CLAIM_PATH] as Record<string, unknown> | undefined;
-	const accountId = auth?.chatgpt_account_id;
-	return typeof accountId === "string" && accountId.length > 0 ? accountId : null;
-}
 
 /**
  * Run the OpenAI Codex OAuth login flow in the browser.
@@ -79,15 +61,11 @@ export async function loginOpenAICodex(): Promise<OAuthCredentials> {
 		throw new Error("Token response missing required fields");
 	}
 
-	const accountId = getAccountId(access);
-	if (!accountId) throw new Error("Failed to extract accountId from token");
-
 	return {
 		providerId: "openai-codex",
 		access,
 		refresh,
 		expires: Date.now() + expiresIn * 1000,
-		accountId,
 	};
 }
 
@@ -109,14 +87,10 @@ export async function refreshOpenAICodex(credentials: OAuthCredentials): Promise
 		throw new Error("Token refresh response missing required fields");
 	}
 
-	const accountId = getAccountId(access);
-	if (!accountId) throw new Error("Failed to extract accountId from refreshed token");
-
 	return {
 		providerId: "openai-codex",
 		access,
 		refresh,
 		expires: Date.now() + expiresIn * 1000,
-		accountId,
 	};
 }

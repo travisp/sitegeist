@@ -9,6 +9,21 @@ const packageRoot = join(__dirname, "..");
 const isWatch = process.argv.includes("--watch");
 const staticDir = join(packageRoot, "static");
 
+// pi-web-ui 0.75 imports legacy pi-ai globals that moved to the compat entry point.
+const piWebUiCompatPlugin = {
+	name: "pi-web-ui-compat",
+	setup(build) {
+		build.onResolve({ filter: /^@earendil-works\/pi-ai$/ }, (args) => {
+			if (!args.importer.includes("@earendil-works/pi-web-ui")) return;
+
+			return build.resolve("@earendil-works/pi-ai/compat", {
+				kind: args.kind,
+				resolveDir: args.resolveDir,
+			});
+		});
+	},
+};
+
 // Chrome only
 const targetBrowser = "chrome";
 const outDir = join(packageRoot, "dist-chrome");
@@ -43,6 +58,7 @@ const buildOptions = {
 		global: "globalThis",
 	},
 	inject: [join(packageRoot, "scripts/process-shim.js")],
+	plugins: [piWebUiCompatPlugin],
 	// Force all mini-lit and lit imports to resolve to sitegeist's node_modules
 	alias: {
 		process: join(packageRoot, "scripts/process-shim.js"),

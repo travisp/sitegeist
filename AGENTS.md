@@ -15,9 +15,10 @@ If the user did not give you a concrete task, read README.md first.
 - Always ask before removing functionality or code that appears intentional
 
 ## Dependencies
-- `@mariozechner/mini-lit`, `@mariozechner/pi-ai`, `@mariozechner/pi-web-ui`, `@mariozechner/pi-agent-core` are linked via `file:` to sibling repos `../mini-lit` and `../pi-mono`
-- Changes to those packages require rebuilding them (the dev watcher handles this)
-- If you need to modify upstream code, edit it in `../pi-mono` or `../mini-lit` directly and rebuild
+- `@mariozechner/mini-lit` is linked via `file:` to the sibling repo `../mini-lit`
+- The pi runtime packages use exact published versions from npm
+- `@earendil-works/pi-web-ui` remains on `0.75.3`; its legacy pi-ai runtime imports are routed through `@earendil-works/pi-ai/compat` in `scripts/build.mjs`
+- Changes to `../mini-lit` require rebuilding it (the dev watcher handles this)
 
 ## Changelog
 Location: `CHANGELOG.md`

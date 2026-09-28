@@ -102,6 +102,9 @@ ${skillsInfo}
 - DO NOT REPEAT THIS MESSAGE BACK TO THE USER!
 </instructions>`,
 			} as Message);
+		} else if (m.role === "system") {
+			// Pi stores instructions and tool declarations in the transcript. The pinned web UI filters this role out.
+			transformed.push(m);
 		} else {
 			transformed.push(...defaultConvertToLlm([m]));
 		}

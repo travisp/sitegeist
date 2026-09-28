@@ -99,7 +99,7 @@ export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateRe
 			currentWindow: true,
 		});
 
-		if (!tab || !tab.id) {
+		if (!tab?.id) {
 			throw new Error("No active tab found");
 		}
 

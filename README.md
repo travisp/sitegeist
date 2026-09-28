@@ -77,6 +77,16 @@ Runs formatting, linting, and type checking for the extension and the `site/` su
 
 The Husky pre-commit hook runs the same checks before each commit.
 
+### Pi runtime and rendering integration tests
+
+With Chrome running with remote debugging enabled on port 9222:
+
+```bash
+devbox run -- npm run test:pi-runtime
+```
+
+Set `CHROME_DEBUG_URL` to use another debugging endpoint. The tests open and close an isolated tab, bundle the extension in memory using its production build options, and exercise Pi with the pinned web UI. Model responses and provider HTTP requests are mocked; no credentials or live API calls are used. The tests also cover PDF/DOCX/XLSX extraction, document previews, Markdown/math, diffs, icons, and both Three.js animations using generated fixtures. The tests do not write to `dist-chrome/` or reload the extension.
+
 ## Building
 
 ```bash

@@ -20,9 +20,9 @@ import {
 
 export {
 	type DeviceCodeCallback,
+	isOAuthCredentials,
 	type OAuthCredentials,
 	type OAuthProviderId,
-	isOAuthCredentials,
 	parseOAuthCredentials,
 	serializeOAuthCredentials,
 };

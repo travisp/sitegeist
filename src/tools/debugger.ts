@@ -1,5 +1,12 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { type Static, StringEnum, type ToolResultMessage, Type } from "@earendil-works/pi-ai";
+import {
+	type JsonObject,
+	type JsonRepresentation,
+	type Static,
+	StringEnum,
+	type ToolResultMessage,
+	Type,
+} from "@earendil-works/pi-ai";
 import {
 	registerToolRenderer,
 	renderCollapsibleHeader,
@@ -29,7 +36,7 @@ const debuggerSchema = Type.Object({
 export type DebuggerParams = Static<typeof debuggerSchema>;
 
 export interface DebuggerResult {
-	value: any;
+	value?: JsonObject | JsonRepresentation<chrome.cookies.Cookie[]>;
 }
 
 // ============================================================================
@@ -79,7 +86,7 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 			currentWindow: true,
 		});
 
-		if (!tab || !tab.id) {
+		if (!tab?.id) {
 			throw new Error("No active tab found");
 		}
 
@@ -141,7 +148,8 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 				});
 
 				// Extract the actual value
-				const details: DebuggerResult = { value: result };
+				// CDP responses are JSON objects; Chrome's API types expose only `object`.
+				const details: DebuggerResult = { value: result as JsonObject | undefined };
 
 				// Format output
 				let output = "";

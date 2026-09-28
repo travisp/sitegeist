@@ -298,7 +298,11 @@ function textFromAssistant(message: AssistantMessage): string {
 
 function standardMessages(messages: AgentMessage[]) {
 	return messages.filter(
-		(message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+		(message) =>
+			message.role === "system" ||
+			message.role === "user" ||
+			message.role === "assistant" ||
+			message.role === "toolResult",
 	);
 }
 
@@ -390,7 +394,10 @@ function createResearchConfig(options: PageResearchRunOptions): AgentLoopConfig 
 			inspectionCount++;
 			return undefined;
 		},
-		shouldStopAfterTurn: () => ++turnCount >= RESEARCH_MAX_TURNS,
+		finishTurn: ({ message }) => {
+			if (message.stopReason === "error" || message.stopReason === "aborted") return;
+			return ++turnCount >= RESEARCH_MAX_TURNS ? { action: "end" } : undefined;
+		},
 		toolExecution: "sequential",
 	};
 }
@@ -419,6 +426,7 @@ async function runFinalResearchAnswer(context: AgentContext, options: PageResear
 		options.signal,
 		options.streamFn,
 	);
+	context.messages.push(...finalMessages);
 	return lastAssistantText(finalMessages);
 }
 
@@ -429,13 +437,14 @@ async function runPageResearch(options: PageResearchRunOptions): Promise<PageRes
 		timestamp: Date.now(),
 	};
 	const context: AgentContext = {
-		systemPrompt: PAGE_RESEARCH_SYSTEM_PROMPT,
-		messages: [],
+		messages: [{ role: "system", content: PAGE_RESEARCH_SYSTEM_PROMPT, timestamp: Date.now() }],
 		tools: [new InspectPageTool()],
 	};
 	const config = createResearchConfig(options);
 
 	const messages = await runAgentLoop([prompt], context, config, () => {}, options.signal, options.streamFn);
+	// The low-level loop returns new messages without appending them to the supplied context.
+	context.messages.push(...messages);
 	const lastMessage = messages[messages.length - 1];
 	const answer = lastAssistantText(messages);
 	const needsFinalAnswer = lastMessage?.role !== "assistant" || hasToolCall(lastMessage) || !answer;

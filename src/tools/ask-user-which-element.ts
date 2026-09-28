@@ -544,7 +544,7 @@ export class AskUserWhichElementTool implements AgentTool<typeof selectElementSc
 				currentWindow: true,
 			});
 
-			if (!tab || !tab.id) {
+			if (!tab?.id) {
 				throw new Error("No active tab found");
 			}
 

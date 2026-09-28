@@ -7,19 +7,28 @@
 - Added a page research tool for asking focused questions about current-page mechanics without carrying full snapshots in model context.
 - Added raw REPL output compaction with a reader tool for searching or slicing omitted output without carrying full dumps in model context.
 - Added an estimated current context usage indicator to the sidebar footer.
+- Added browser integration tests for Pi runtime, provider payloads, session persistence, research limits, and the pinned web UI.
+- Added browser rendering tests for PDF/DOCX/XLSX attachments, Markdown and math, diffs, icons, and both Three.js animations.
 
 ### Changed
 
-- Upgraded the pi runtime packages to 0.80.8 while retaining pi-web-ui 0.75.3 through pi-ai's compatibility entry point.
+- Upgraded the pi runtime packages to 0.87.1 while retaining pi-web-ui 0.75.3 through pi-ai's compatibility entry point.
+- Migrated page research to transcript-based system prompts and Pi's completed-turn hook.
 - Refreshed compatible extension and website dependencies to address known dependency vulnerabilities.
 - Synchronized linked mini-lit dependency metadata after its Claude Code and Vitest security updates.
 - Added a Devbox environment with Node.js 24 for dependency management and checks.
+- Updated esbuild to 0.28.2, concurrently to 10.0.5, and Chrome API types to 0.3.1.
+- Updated document rendering, icons, Three.js, TypeScript 7, and website Vite 8. Kept the pinned web UI on the same document-rendering versions as the extension.
+- Updated extension and website linting to Biome 2.5.14. Disabled website accessibility lint rules while retaining other recommended checks.
 
 ### Fixed
 
 - Markdown and other file attachments now reach the model in Sitegeist's custom message transformer.
 - Live chat rendering now updates after message events that mutate the message array in place.
 - Sidebar no longer remains visually stuck in streaming mode after `agent_end` fires before the agent clears runtime state.
+- System instructions and tool declarations survive the pinned web UI's message conversion.
+- Page research retains its collected evidence for the final answer and includes the full transcript in tool details.
+- Adapted the pinned web UI's PDF cleanup calls to PDF.js 6's loading-task API.
 
 ### Removed
 

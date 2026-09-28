@@ -120,7 +120,7 @@ export class BrowserJsRuntimeProvider implements SandboxRuntimeProvider {
 			currentWindow: true,
 		});
 
-		if (!tab || !tab.id) {
+		if (!tab?.id) {
 			respond({
 				success: false,
 				error: "No active tab found",

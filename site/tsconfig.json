@@ -2,6 +2,7 @@
 	"compilerOptions": {
 		"target": "ES2022",
 		"lib": ["ES2022", "DOM"],
+		"types": ["node"],
 		"module": "ESNext",
 		"moduleResolution": "bundler",
 		"strict": true,
@@ -11,5 +12,5 @@
 		"experimentalDecorators": true,
 		"useDefineForClassFields": false
 	},
-	"include": ["src/**/*"]
+	"include": ["src/**/*", "infra/**/*.ts"]
 }

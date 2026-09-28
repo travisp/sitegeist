@@ -1,74 +1,19 @@
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, watch } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { build, context } from "esbuild";
+import { createBuildOptions, packageRoot } from "./build-options.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const packageRoot = join(__dirname, "..");
 const isWatch = process.argv.includes("--watch");
 const staticDir = join(packageRoot, "static");
-
-// pi-web-ui 0.75 imports legacy pi-ai globals that moved to the compat entry point.
-const piWebUiCompatPlugin = {
-	name: "pi-web-ui-compat",
-	setup(build) {
-		build.onResolve({ filter: /^@earendil-works\/pi-ai$/ }, (args) => {
-			if (!args.importer.includes("@earendil-works/pi-web-ui")) return;
-
-			return build.resolve("@earendil-works/pi-ai/compat", {
-				kind: args.kind,
-				resolveDir: args.resolveDir,
-			});
-		});
-	},
-};
 
 // Chrome only
 const targetBrowser = "chrome";
 const outDir = join(packageRoot, "dist-chrome");
 
-const entryPoints = {
-	sidepanel: join(packageRoot, "src/sidepanel.ts"),
-	debug: join(packageRoot, "src/debug.ts"),
-	icons: join(packageRoot, "src/icons.ts"),
-	background: join(packageRoot, "src/background.ts"),
-};
-
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-const buildOptions = {
-	absWorkingDir: packageRoot,
-	entryPoints,
-	bundle: true,
-	outdir: outDir,
-	format: "esm",
-	target: ["chrome120"],
-	platform: "browser",
-	sourcemap: isWatch ? "inline" : true,
-	entryNames: "[name]",
-	loader: {
-		".ts": "ts",
-		".tsx": "tsx",
-	},
-	define: {
-		"process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? (isWatch ? "development" : "production")),
-		"process.env.TARGET_BROWSER": JSON.stringify(targetBrowser),
-		global: "globalThis",
-	},
-	inject: [join(packageRoot, "scripts/process-shim.js")],
-	plugins: [piWebUiCompatPlugin],
-	// Force all mini-lit and lit imports to resolve to sitegeist's node_modules
-	alias: {
-		process: join(packageRoot, "scripts/process-shim.js"),
-		"@mariozechner/mini-lit": join(packageRoot, "node_modules/@mariozechner/mini-lit"),
-		lit: join(packageRoot, "node_modules/lit"),
-		"lit/decorators.js": join(packageRoot, "node_modules/lit/decorators.js"),
-		"lit/directives/class-map.js": join(packageRoot, "node_modules/lit/directives/class-map.js"),
-		"lit/directives/unsafe-html.js": join(packageRoot, "node_modules/lit/directives/unsafe-html.js"),
-	},
-};
+const buildOptions = createBuildOptions(isWatch);
 
 // Get all files from static directory
 const getStaticFiles = () => {

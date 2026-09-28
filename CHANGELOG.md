@@ -12,6 +12,7 @@
 
 - Upgraded the pi runtime packages to 0.80.8 while retaining pi-web-ui 0.75.3 through pi-ai's compatibility entry point.
 - Refreshed compatible extension and website dependencies to address known dependency vulnerabilities.
+- Synchronized linked mini-lit dependency metadata after its Claude Code and Vitest security updates.
 - Added a Devbox environment with Node.js 24 for dependency management and checks.
 
 ### Fixed

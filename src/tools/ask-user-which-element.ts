@@ -12,6 +12,7 @@ import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Loader2, MousePointer2 } from "lucide";
 import { ASK_USER_WHICH_ELEMENT_TOOL_DESCRIPTION } from "../prompts/prompts.js";
+import { browserTarget } from "./browser-target.js";
 import "../utils/i18n-extension.js";
 
 // ============================================================================
@@ -538,15 +539,7 @@ export class AskUserWhichElementTool implements AgentTool<typeof selectElementSc
 				throw new Error("Tool execution was aborted");
 			}
 
-			// Get the active tab
-			const [tab] = await chrome.tabs.query({
-				active: true,
-				currentWindow: true,
-			});
-
-			if (!tab?.id) {
-				throw new Error("No active tab found");
-			}
+			const tab = await browserTarget.requireFocused();
 
 			// Check if we can execute scripts on this tab
 			if (

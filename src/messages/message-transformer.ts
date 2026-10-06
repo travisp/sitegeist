@@ -75,10 +75,11 @@ function reorderMessages(messages: Message[]): Message[] {
 
 // Custom message transformer for browser extension
 // Handles navigation messages and app-specific message types
-export async function browserMessageTransformer(messages: AgentMessage[]): Promise<Message[]> {
+export function browserMessageTransformer(messages: AgentMessage[]): Message[] {
 	const transformed: Message[] = [];
 
 	for (const m of messages) {
+		if (m.role === "conversation-compaction") continue;
 		if (m.role === "navigation") {
 			const nav = m as NavigationMessage;
 			const tabInfo = nav.tabId !== undefined ? ` (tab id: ${nav.tabId})` : "";

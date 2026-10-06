@@ -1,4 +1,4 @@
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { build } from "esbuild";
@@ -50,65 +50,100 @@ const server = createServer((request, response) => {
 server.listen(0, "127.0.0.1");
 await once(server, "listening");
 
-let target;
 let socket;
 try {
-	const response = await fetch(`${browserUrl}/json/new?about:blank`, { method: "PUT" });
-	if (!response.ok) throw new Error(`Chrome target creation failed: ${response.status}`);
-	target = await response.json();
-	socket = new WebSocket(target.webSocketDebuggerUrl);
+	const response = await fetch(`${browserUrl}/json/version`);
+	if (!response.ok) throw new Error(`Chrome discovery failed: ${response.status}`);
+	const browser = await response.json();
+	socket = new WebSocket(browser.webSocketDebuggerUrl);
 	await once(socket, "open");
+	await runBrowserTests(socket, `http://127.0.0.1:${server.address().port}`);
+} finally {
+	socket?.close();
+	const closed = once(server, "close");
+	server.close();
+	// Chrome can leave speculative connections open even after its test tab closes.
+	server.closeAllConnections();
+	await closed;
+}
+
+async function runBrowserTests(socket, url) {
 	let nextId = 0;
+	let sessionId;
 	const pending = new Map();
-	const events = new Map();
+	const pageEvents = new EventEmitter();
+	const disconnected = new AbortController();
 	const runtimeErrors = [];
+	pageEvents.on("Runtime.exceptionThrown", (event) => runtimeErrors.push(event.exceptionDetails));
 	socket.on("message", (data) => {
 		const message = JSON.parse(data.toString());
 		if (message.id) {
-			const callback = pending.get(message.id);
-			pending.delete(message.id);
-			callback(message);
-		} else {
-			events.get(message.method)?.(message.params);
-			if (message.method === "Runtime.exceptionThrown") runtimeErrors.push(message.params.exceptionDetails);
+			// A reply can arrive after its request timed out.
+			pending.get(message.id)?.(
+				message.error ? new Error(JSON.stringify(message.error)) : undefined,
+				message.result,
+			);
+		} else if (message.sessionId === sessionId) {
+			pageEvents.emit(message.method, message.params);
 		}
 	});
-	const send = (method, params = {}) =>
+	const rejectPending = (error) => {
+		disconnected.abort(error);
+		for (const finish of pending.values()) finish(error);
+	};
+	socket.on("close", () => rejectPending(new Error("Chrome connection closed")));
+	socket.on("error", rejectPending);
+	const send = (method, params = {}, sessionId) =>
 		new Promise((resolve, reject) => {
+			if (socket.readyState !== WebSocket.OPEN) {
+				reject(new Error("Chrome connection is not open"));
+				return;
+			}
 			const id = ++nextId;
-			const timeout = setTimeout(() => reject(new Error(`Timed out: ${method}`)), 60_000);
-			pending.set(id, (message) => {
+			const finish = (error, result) => {
 				clearTimeout(timeout);
-				if (message.error) reject(new Error(JSON.stringify(message.error)));
-				else resolve(message.result);
+				pending.delete(id);
+				if (error) reject(error);
+				else resolve(result);
+			};
+			const timeout = setTimeout(() => finish(new Error(`Timed out: ${method}`)), 60_000);
+			pending.set(id, finish);
+			socket.send(JSON.stringify({ id, method, params, sessionId }), (error) => {
+				if (error) finish(error);
 			});
-			socket.send(JSON.stringify({ id, method, params }));
 		});
-	await send("Page.enable");
-	await send("Runtime.enable");
-	const loaded = new Promise((resolve, reject) => {
-		const timeout = setTimeout(() => reject(new Error("Test page did not load")), 60_000);
-		events.set("Page.loadEventFired", () => {
-			clearTimeout(timeout);
-			resolve();
+
+	const { targetId } = await send("Target.createTarget", { url: "about:blank", background: true });
+	try {
+		({ sessionId } = await send("Target.attachToTarget", { targetId, flatten: true }));
+		// Bind page commands to this tab; Target commands use the browser connection directly.
+		const page = (method, params) => send(method, params, sessionId);
+		await Promise.all([
+			page("Page.enable"),
+			page("Runtime.enable"),
+			// Keep animation-frame rendering tests running without activating the real tab/window.
+			page("Emulation.setFocusEmulationEnabled", { enabled: true }),
+		]);
+		await Promise.all([
+			once(pageEvents, "Page.loadEventFired", {
+				signal: AbortSignal.any([disconnected.signal, AbortSignal.timeout(60_000)]),
+			}),
+			page("Page.navigate", { url }),
+		]);
+		const result = await page("Runtime.evaluate", {
+			expression: "globalThis.piRuntimeTests",
+			awaitPromise: true,
+			returnByValue: true,
 		});
-	});
-	await send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}` });
-	await loaded;
-	const result = await send("Runtime.evaluate", {
-		expression: "globalThis.piRuntimeTests",
-		awaitPromise: true,
-		returnByValue: true,
-	});
-	if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
-	const tests = result.result.value;
-	if (!Array.isArray(tests) || tests.length === 0) throw new Error("Browser tests did not start");
-	for (const test of tests)
-		console.log(`${test.error ? "FAIL" : "PASS"} ${test.name}${test.error ? `\n${test.error}` : ""}`);
-	if (runtimeErrors.length) console.error(JSON.stringify(runtimeErrors, null, 2));
-	if (tests.some((test) => test.error) || runtimeErrors.length) process.exitCode = 1;
-} finally {
-	socket?.close();
-	if (target) await fetch(`${browserUrl}/json/close/${target.id}`);
-	server.close();
+		if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+		const tests = result.result.value;
+		if (!Array.isArray(tests) || tests.length === 0) throw new Error("Browser tests did not start");
+		for (const test of tests)
+			console.log(`${test.error ? "FAIL" : "PASS"} ${test.name}${test.error ? `\n${test.error}` : ""}`);
+		if (runtimeErrors.length) console.error(JSON.stringify(runtimeErrors, null, 2));
+		if (tests.some((test) => test.error) || runtimeErrors.length) process.exitCode = 1;
+	} finally {
+		if (!disconnected.signal.aborted && socket.readyState === WebSocket.OPEN)
+			await send("Target.closeTarget", { targetId });
+	}
 }

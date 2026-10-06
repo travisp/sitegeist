@@ -9,22 +9,15 @@ import { TabPill } from "../components/TabPill.js";
 import { NAVIGATE_TOOL_DESCRIPTION } from "../prompts/prompts.js";
 import { getSitegeistStorage } from "../storage/app-storage.js";
 import type { Skill } from "../storage/stores/skills-store.js";
-import { formatSkills } from "../utils/format-skills.js";
+import type { SkillDisclosure } from "../utils/format-skills.js";
 import "../utils/i18n-extension.js";
+import { browserTarget, type TargetTab } from "./browser-target.js";
 
 // Track tool-initiated navigations to filter out duplicate navigation messages
 let isNavigating = false;
 
 export function isToolNavigating(): boolean {
 	return isNavigating;
-}
-
-function markNavigationStart() {
-	isNavigating = true;
-}
-
-function markNavigationEnd() {
-	isNavigating = false;
 }
 
 // ============================================================================
@@ -34,8 +27,13 @@ function markNavigationEnd() {
 const navigateSchema = Type.Object({
 	url: Type.Optional(Type.String({ description: "URL to navigate to (in current tab or new tab if newTab is true)" })),
 	newTab: Type.Optional(Type.Boolean({ description: "Set to true to open URL in a new tab instead of current tab" })),
-	listTabs: Type.Optional(Type.Boolean({ description: "Set to true to list all open tabs" })),
-	switchToTab: Type.Optional(Type.Number({ description: "Tab ID to switch to (get IDs from listTabs)" })),
+	listTabs: Type.Optional(Type.Boolean({ description: "Set to true to list tabs in the working window" })),
+	switchToTab: Type.Optional(
+		Type.Number({
+			description:
+				"Tab ID in the working window (get IDs from listTabs); selects the tab without focusing the window",
+		}),
+	),
 });
 
 export type NavigateParams = Static<typeof navigateSchema>;
@@ -48,14 +46,38 @@ export interface TabInfo {
 	favicon?: string;
 }
 
-export interface NavigateResult {
-	finalUrl?: string;
-	title?: string;
-	favicon?: string;
-	tabId?: number;
-	skills?: Array<{ name: string; shortDescription: string; fullDetails?: Skill }>;
-	tabs?: TabInfo[];
-	switchedToTab?: number;
+export type NavigateResult =
+	| { kind: "tabs"; tabs: TabInfo[] }
+	| {
+			kind: "navigation";
+			finalUrl: string | undefined;
+			title: string | undefined;
+			favicon: string | undefined;
+			tabId: number;
+			skills: Skill[];
+	  };
+
+type NavigateAction =
+	| { kind: "list" }
+	| { kind: "select"; tabId: number }
+	| { kind: "navigate"; url: string; newTab: boolean };
+
+/** Resolve the tool's flat arguments once, before any browser side effects. */
+export function parseNavigateAction(args: NavigateParams): NavigateAction {
+	if (args.listTabs) {
+		if (args.url !== undefined || args.switchToTab !== undefined || args.newTab) {
+			throw new Error("listTabs cannot be combined with navigation");
+		}
+		return { kind: "list" };
+	}
+	if (args.switchToTab !== undefined) {
+		if (args.url !== undefined || args.newTab) {
+			throw new Error("switchToTab cannot be combined with a URL or newTab; select the tab first, then navigate");
+		}
+		return { kind: "select", tabId: args.switchToTab };
+	}
+	if (args.url === undefined) throw new Error("Provide a URL or a target tab ID");
+	return { kind: "navigate", url: args.url, newTab: args.newTab === true };
 }
 
 // ============================================================================
@@ -68,197 +90,107 @@ export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateRe
 	description = NAVIGATE_TOOL_DESCRIPTION;
 	parameters = navigateSchema;
 
+	constructor(private readonly skills: SkillDisclosure) {}
+
 	async execute(
 		_toolCallId: string,
 		params: unknown,
 		signal?: AbortSignal,
 	): Promise<{ content: Array<{ type: "text"; text: string }>; details: NavigateResult }> {
-		const args = params as NavigateParams;
-		if (signal?.aborted) {
-			throw new Error("Navigation aborted");
-		}
+		signal?.throwIfAborted();
+		const action = parseNavigateAction(params as NavigateParams);
+		if (action.kind === "list") return this.listTabs();
 
-		// Handle list tabs action
-		if ("listTabs" in args) {
-			return this.listTabs();
-		}
-
-		// Handle switch tab action
-		if ("switchToTab" in args && args.switchToTab !== undefined) {
-			markNavigationStart();
-			try {
-				return await this.switchToTab(args.switchToTab);
-			} finally {
-				markNavigationEnd();
-			}
-		}
-
-		// Get active tab for navigation actions
-		const [tab] = await chrome.tabs.query({
-			active: true,
-			currentWindow: true,
-		});
-
-		if (!tab?.id) {
-			throw new Error("No active tab found");
-		}
-
-		let finalUrl: string;
-		let targetTabId = tab.id;
-
-		markNavigationStart();
+		isNavigating = true;
 		try {
-			if ("url" in args && args.url !== undefined) {
-				// Check if opening in new tab
-				if ("newTab" in args && args.newTab) {
-					finalUrl = await this.openInNewTab(args.url, signal);
-					// Get the newly created tab
-					const tabs = await chrome.tabs.query({});
-					const newTab = tabs.find((t: chrome.tabs.Tab) => t.url === finalUrl);
-					if (newTab?.id) {
-						targetTabId = newTab.id;
-					}
-				} else {
-					// Navigate to URL in current tab
-					finalUrl = await this.navigateToUrl(tab.id, args.url, signal);
-				}
+			let tab: TargetTab;
+			let description: string;
+			if (action.kind === "select") {
+				tab = await browserTarget.select(action.tabId);
+				description = "Selected working tab";
+			} else if (action.newTab) {
+				tab = await this.openTab();
+				description = "Opened tab";
 			} else {
-				throw new Error("Invalid navigation parameters");
+				tab = await browserTarget.select();
+				description = "Navigated tab";
 			}
+
+			let finalUrl = tab.url;
+			if (action.kind === "navigate") {
+				finalUrl = await this.navigateToUrl(tab.id, action.url, signal);
+				tab = await browserTarget.get(tab.id);
+			}
+
+			const skillsRepo = getSitegeistStorage().skills;
+			const matchingSkills = finalUrl ? await skillsRepo.getSkillsForUrl(finalUrl) : [];
+			const skillsOutput = this.skills.format(matchingSkills);
+			const details: NavigateResult = {
+				kind: "navigation",
+				finalUrl,
+				title: tab.title,
+				favicon: tab.favIconUrl,
+				tabId: tab.id,
+				skills: matchingSkills,
+			};
+			const output = `${description} ${tab.id}${finalUrl ? `: ${finalUrl}` : ""}\n\n${skillsOutput}`;
+			return { content: [{ type: "text", text: output }], details };
 		} finally {
-			markNavigationEnd();
+			isNavigating = false;
 		}
-
-		// Get updated tab info using query (better cross-browser support)
-		const updatedTabs = await chrome.tabs.query({});
-		const updatedTab = updatedTabs.find((t: chrome.tabs.Tab) => t.id === targetTabId);
-		const title = updatedTab?.title || "Untitled";
-		const favicon = updatedTab?.favIconUrl;
-
-		// Get skills for the final URL
-		const skillsRepo = getSitegeistStorage().skills;
-		const matchingSkills = await skillsRepo.getSkillsForUrl(finalUrl);
-		const { newOrUpdated, unchanged, formattedText: skillsOutput } = formatSkills(matchingSkills);
-
-		// Build skills array with full details for all skills (needed for UI rendering)
-		const skills = [
-			...newOrUpdated.map((s) => ({
-				name: s.name,
-				shortDescription: s.shortDescription,
-				fullDetails: s,
-			})),
-			...unchanged.map((s) => ({
-				name: s.name,
-				shortDescription: s.shortDescription,
-				fullDetails: s,
-			})),
-		];
-
-		const details: NavigateResult = {
-			finalUrl,
-			title,
-			favicon,
-			tabId: targetTabId,
-			skills,
-		};
-
-		// Build output message
-		let output = "";
-		if ("newTab" in args && args.newTab) {
-			output = `Opened in new tab: ${finalUrl} (tab ${targetTabId})\n`;
-		} else {
-			output = `Navigated to: ${finalUrl} (tab ${targetTabId})\n`;
-		}
-
-		output += `\n${skillsOutput}`;
-
-		return { content: [{ type: "text", text: output }], details };
 	}
 
 	private async navigateToUrl(tabId: number, url: string, signal?: AbortSignal): Promise<string> {
+		signal?.throwIfAborted();
 		return new Promise((resolve, reject) => {
-			if (signal?.aborted) {
-				reject(new Error("Aborted"));
-				return;
-			}
-
-			// Set up DOMContentLoaded listener (fires when DOM is ready, more reliable than onCompleted)
-			const listener = (details: chrome.webNavigation.WebNavigationFramedCallbackDetails) => {
-				if (details.tabId === tabId && details.frameId === 0) {
-					chrome.webNavigation.onDOMContentLoaded.removeListener(listener);
-					if (abortListener) signal?.removeEventListener("abort", abortListener);
-					resolve(details.url);
-				}
+			const cleanup = () => {
+				clearTimeout(timeout);
+				chrome.webNavigation.onDOMContentLoaded.removeListener(loaded);
+				chrome.webNavigation.onErrorOccurred.removeListener(failed);
+				chrome.tabs.onRemoved.removeListener(closed);
+				signal?.removeEventListener("abort", aborted);
 			};
-
-			// Set up abort listener
-			const abortListener = () => {
-				if (chrome.webNavigation?.onDOMContentLoaded) {
-					chrome.webNavigation.onDOMContentLoaded.removeListener(listener);
-				}
-				reject(new Error("Aborted"));
+			const fail = (error: unknown) => {
+				cleanup();
+				reject(error);
 			};
-
-			if (signal) {
-				signal.addEventListener("abort", abortListener);
-			}
-
-			chrome.webNavigation.onDOMContentLoaded.addListener(listener);
-
-			// Trigger navigation
-			chrome.tabs.update(tabId, { url }).catch((err: Error) => {
-				if (chrome.webNavigation?.onDOMContentLoaded) {
-					chrome.webNavigation.onDOMContentLoaded.removeListener(listener);
-				}
-				if (abortListener) signal?.removeEventListener("abort", abortListener);
-				reject(err);
-			});
+			const loaded = (event: chrome.webNavigation.WebNavigationFramedCallbackDetails) => {
+				if (event.tabId !== tabId || event.frameId !== 0) return;
+				// A new tab's initial blank document is not the requested destination.
+				if (event.url === "about:blank" && url !== "about:blank") return;
+				cleanup();
+				resolve(event.url);
+			};
+			const failed = (event: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => {
+				if (event.tabId === tabId && event.frameId === 0)
+					fail(new Error(`Navigation failed in tab ${tabId}: ${event.error}`));
+			};
+			const closed = (closedId: number) => {
+				if (closedId === tabId) fail(new Error(`Target tab ${tabId} was closed during navigation`));
+			};
+			const aborted = () => fail(new Error("Navigation aborted"));
+			const timeout = setTimeout(
+				() => fail(new Error(`Navigation timed out in tab ${tabId}; inspect its current state before retrying`)),
+				30_000,
+			);
+			chrome.webNavigation.onDOMContentLoaded.addListener(loaded);
+			chrome.webNavigation.onErrorOccurred.addListener(failed);
+			chrome.tabs.onRemoved.addListener(closed);
+			signal?.addEventListener("abort", aborted, { once: true });
+			chrome.tabs.update(tabId, { url }).catch(fail);
 		});
 	}
 
-	private async openInNewTab(url: string, signal?: AbortSignal): Promise<string> {
-		if (signal?.aborted) {
-			throw new Error("Aborted");
-		}
-
-		const newTab = await chrome.tabs.create({ url, active: true });
-
-		if (!newTab.id) {
-			throw new Error("Failed to create new tab");
-		}
-
-		// Wait for the tab to load
-		return new Promise((resolve, reject) => {
-			if (signal?.aborted) {
-				reject(new Error("Aborted"));
-				return;
-			}
-
-			const listener = (details: chrome.webNavigation.WebNavigationFramedCallbackDetails) => {
-				if (details.tabId === newTab.id && details.frameId === 0) {
-					chrome.webNavigation.onDOMContentLoaded.removeListener(listener);
-					if (abortListener) signal?.removeEventListener("abort", abortListener);
-					resolve(details.url);
-				}
-			};
-
-			const abortListener = () => {
-				if (chrome.webNavigation?.onDOMContentLoaded) {
-					chrome.webNavigation.onDOMContentLoaded.removeListener(listener);
-				}
-				reject(new Error("Aborted"));
-			};
-
-			if (signal) {
-				signal.addEventListener("abort", abortListener);
-			}
-
-			chrome.webNavigation.onDOMContentLoaded.addListener(listener);
-		});
+	private async openTab(): Promise<TargetTab> {
+		// Load the destination only after navigateToUrl has installed its listeners.
+		if (browserTarget.windowId === undefined) throw new Error("No working browser window selected");
+		const tab = await chrome.tabs.create({ url: "about:blank", active: false, windowId: browserTarget.windowId });
+		return browserTarget.select(tab.id!);
 	}
 
 	private async listTabs(): Promise<{ content: Array<{ type: "text"; text: string }>; details: NavigateResult }> {
-		const tabs = await chrome.tabs.query({});
+		if (browserTarget.windowId === undefined) throw new Error("No working browser window selected");
+		const tabs = await chrome.tabs.query({ windowId: browserTarget.windowId });
 
 		const tabInfos: TabInfo[] = tabs
 			.filter(
@@ -269,81 +201,21 @@ export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateRe
 				id: t.id,
 				url: t.url,
 				title: t.title || "Untitled",
-				active: t.active || false,
+				active: t.active,
 				favicon: t.favIconUrl,
 			}));
 
 		const details: NavigateResult = {
+			kind: "tabs",
 			tabs: tabInfos,
 		};
 
 		let output = `Found ${tabInfos.length} open tabs:\n`;
 		for (const tab of tabInfos) {
-			const activeMarker = tab.active ? " [ACTIVE]" : "";
+			const activeMarker = `${tab.active ? " [VISIBLE IN WINDOW]" : ""}${tab.id === browserTarget.tabId ? " [WORKING TARGET]" : ""}`;
 			output += `  - Tab ${tab.id}: ${tab.title}${activeMarker}\n`;
 			output += `    URL: ${tab.url}\n`;
 		}
-
-		return { content: [{ type: "text", text: output }], details };
-	}
-
-	private async switchToTab(
-		tabId: number,
-	): Promise<{ content: Array<{ type: "text"; text: string }>; details: NavigateResult }> {
-		// Ensure tabId is a number (in case it comes through as string)
-		const numericTabId = typeof tabId === "string" ? parseInt(tabId, 10) : tabId;
-
-		// Query for the tab to get its details
-		const tabs = await chrome.tabs.query({});
-		const tab = tabs.find((t: chrome.tabs.Tab) => t.id === numericTabId);
-
-		if (!tab) {
-			throw new Error(`Tab ${numericTabId} not found`);
-		}
-
-		// Activate the tab
-		await chrome.tabs.update(numericTabId, { active: true });
-
-		// Focus the window containing the tab
-		if (tab.windowId) {
-			await chrome.windows.update(tab.windowId, { focused: true });
-		}
-
-		const finalUrl = tab.url || "";
-		const title = tab.title || "Untitled";
-		const favicon = tab.favIconUrl;
-
-		// Get skills for the tab's URL
-		const skillsRepo = getSitegeistStorage().skills;
-		const matchingSkills = finalUrl ? await skillsRepo.getSkillsForUrl(finalUrl) : [];
-		const { newOrUpdated, unchanged, formattedText: skillsOutput } = formatSkills(matchingSkills);
-
-		// Build skills array with full details for all skills (needed for UI rendering)
-		const skills = [
-			...newOrUpdated.map((s) => ({
-				name: s.name,
-				shortDescription: s.shortDescription,
-				fullDetails: s,
-			})),
-			...unchanged.map((s) => ({
-				name: s.name,
-				shortDescription: s.shortDescription,
-				fullDetails: s,
-			})),
-		];
-
-		const details: NavigateResult = {
-			finalUrl,
-			title,
-			favicon,
-			tabId: numericTabId,
-			skills,
-			switchedToTab: numericTabId,
-		};
-
-		let output = `Switched to tab ${numericTabId}: ${title}\n`;
-		output += `URL: ${finalUrl}\n`;
-		output += `\n${skillsOutput}`;
 
 		return { content: [{ type: "text", text: output }], details };
 	}
@@ -398,15 +270,13 @@ export const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 
 		// Complete state (with result)
 		if (result && !result.isError && result.details) {
-			const { finalUrl, title, favicon, skills, tabs } = result.details;
-
 			// Handle tab listing
-			if (tabs) {
+			if (result.details.kind === "tabs") {
 				return {
 					content: html`
 						<div class="flex items-center gap-2 flex-wrap">
 							<span class="text-sm text-muted-foreground">${i18n("Open tabs")}</span>
-							${tabs.map((tab) => TabPill(tab, true))}
+							${result.details.tabs.map((tab) => TabPill(tab, true))}
 						</div>
 					`,
 					isCustom: false,
@@ -414,25 +284,9 @@ export const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 			}
 
 			// Handle navigation/switch results
+			const { finalUrl, title, favicon, skills } = result.details;
 			if (finalUrl && title) {
 				const faviconUrl = favicon || getFallbackFavicon(finalUrl);
-
-				// Convert skills to Skill objects for SkillPill
-				// Use fullDetails if available (for new/updated skills), otherwise create minimal skill
-				const skillObjects: Skill[] = (skills || []).map((s) =>
-					s.fullDetails
-						? s.fullDetails
-						: {
-								name: s.name,
-								shortDescription: s.shortDescription,
-								description: "",
-								examples: "",
-								library: "",
-								domainPatterns: [],
-								createdAt: new Date().toISOString(),
-								lastUpdated: new Date().toISOString(),
-							},
-				);
 
 				return {
 					content: html`
@@ -446,10 +300,10 @@ export const navigateRenderer: ToolRenderer<NavigateParams, NavigateResult> = {
 								<span class="truncate font-medium">${title}</span>
 							</button>
 							${
-								skillObjects.length > 0
+								skills.length > 0
 									? html`
 										<div class="flex flex-wrap gap-2">
-											${skillObjects.map((s) => SkillPill(s, true))}
+											${skills.map((s) => SkillPill(s, true))}
 										</div>
 								  `
 									: ""

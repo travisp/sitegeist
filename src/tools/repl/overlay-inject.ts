@@ -1,27 +1,14 @@
 import { createOverlayScript, removeOverlayScript } from "./overlay-content.js";
 
 const OVERLAY_WORLD_ID = "sitegeist-repl-overlay";
+const overlayRuns = new Map<number, string>();
 
-/**
- * Get the currently active tab ID.
- * @returns Tab ID of the active tab in the current window
- * @throws Error if no active tab is found
- */
-async function getActiveTabId(): Promise<number> {
-	const [tab] = await chrome.tabs.query({
-		active: true,
-		currentWindow: true,
-	});
-
-	if (!tab?.id) {
-		throw new Error("No active tab found");
-	}
-
-	return tab.id;
+export function ownsOverlayRun(runId: unknown): boolean {
+	return typeof runId === "string" && [...overlayRuns.values()].includes(runId);
 }
 
 /**
- * Inject the REPL overlay into the active tab.
+ * Inject the REPL overlay into a specific tab.
  * @param tabId - ID of the tab to inject into
  * @param taskName - Name of the task being executed (shown in overlay)
  */
@@ -40,45 +27,42 @@ export async function injectOverlay(tabId: number, taskName: string): Promise<vo
 			return;
 		}
 
-		// Use userScripts API with messaging enabled
-		if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
-			// Configure world with messaging enabled
-			try {
-				await chrome.userScripts.configureWorld({
-					worldId: OVERLAY_WORLD_ID,
-					messaging: true,
-					csp: "script-src 'unsafe-eval' 'unsafe-inline'; style-src 'unsafe-inline'; default-src 'none';",
-				});
-			} catch (e) {
-				console.warn("[Overlay] Failed to configure userScripts world:", e);
-			}
-
-			// Inject overlay script
-			await chrome.userScripts.execute({
-				js: [{ code: createOverlayScript(taskName) }],
-				target: { tabId, allFrames: false },
-				world: "USER_SCRIPT",
-				worldId: OVERLAY_WORLD_ID,
-				injectImmediately: true,
-			});
-
-			console.log("[Overlay] Injected overlay into tab", tabId);
-		} else {
-			console.warn("[Overlay] userScripts API not available");
+		if (!chrome.userScripts) {
+			console.warn("[Overlay] userScripts permission is not enabled");
+			return;
 		}
+		await chrome.userScripts.configureWorld({
+			worldId: OVERLAY_WORLD_ID,
+			messaging: true,
+			csp: "script-src 'unsafe-eval' 'unsafe-inline'; style-src 'unsafe-inline'; default-src 'none';",
+		});
+
+		// Route Stop back to this sidebar even if navigation changes its working tab.
+		const runId = crypto.randomUUID();
+		overlayRuns.set(tabId, runId);
+		await chrome.userScripts.execute({
+			js: [{ code: createOverlayScript(taskName, runId) }],
+			target: { tabId, allFrames: false },
+			world: "USER_SCRIPT",
+			worldId: OVERLAY_WORLD_ID,
+			injectImmediately: true,
+		});
+		console.log("[Overlay] Injected overlay into tab", tabId);
 	} catch (error) {
-		// Don't fail the REPL if overlay injection fails
+		overlayRuns.delete(tabId);
+		// The overlay is cosmetic; page execution reports its own permission errors.
 		console.warn("[Overlay] Failed to inject overlay:", error);
 	}
 }
 
 /**
- * Remove the REPL overlay from the active tab.
+ * Remove the REPL overlay from the tab where it was injected.
  * @param tabId - ID of the tab to remove overlay from
  */
 export async function removeOverlay(tabId: number): Promise<void> {
+	overlayRuns.delete(tabId);
 	try {
-		if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
+		if (chrome.userScripts) {
 			await chrome.userScripts.execute({
 				js: [{ code: removeOverlayScript() }],
 				target: { tabId, allFrames: false },
@@ -92,31 +76,5 @@ export async function removeOverlay(tabId: number): Promise<void> {
 	} catch (error) {
 		// Don't fail the REPL if overlay removal fails (tab might be closed)
 		console.warn("[Overlay] Failed to remove overlay:", error);
-	}
-}
-
-/**
- * Inject overlay for the currently active tab.
- * Automatically determines the active tab.
- * @param taskName - Name of the task being executed
- * @returns Tab ID where overlay was injected
- */
-export async function injectOverlayForActiveTab(taskName: string): Promise<number> {
-	const tabId = await getActiveTabId();
-	await injectOverlay(tabId, taskName);
-	return tabId;
-}
-
-/**
- * Remove overlay from the currently active tab.
- * Automatically determines the active tab.
- */
-export async function removeOverlayForActiveTab(): Promise<void> {
-	try {
-		const tabId = await getActiveTabId();
-		await removeOverlay(tabId);
-	} catch (error) {
-		// Tab might have been closed
-		console.warn("[Overlay] Failed to remove overlay from active tab:", error);
 	}
 }

@@ -4,6 +4,7 @@ import {
 	NAVIGATE_RUNTIME_PROVIDER_DESCRIPTION,
 } from "../../prompts/prompts.js";
 import { getSitegeistStorage } from "../../storage/app-storage.js";
+import { browserTarget } from "../browser-target.js";
 import type { NavigateParams, NavigateTool } from "../navigate.js";
 import { buildWrapperCode, checkUserScriptsAvailability } from "./userscripts-helpers.js";
 
@@ -11,7 +12,7 @@ import { buildWrapperCode, checkUserScriptsAvailability } from "./userscripts-he
  * BrowserJsRuntimeProvider
  *
  * Provides the browserjs() helper to REPL scripts, which executes code
- * in the active browser tab's page context via userScripts API.
+ * in the working target tab's page context via userScripts API.
  *
  * Usage in REPL:
  *   const title = await browserjs(() => document.title);
@@ -114,17 +115,11 @@ export class BrowserJsRuntimeProvider implements SandboxRuntimeProvider {
 			return;
 		}
 
-		// Get current tab
-		const [tab] = await chrome.tabs.query({
-			active: true,
-			currentWindow: true,
-		});
-
-		if (!tab?.id) {
-			respond({
-				success: false,
-				error: "No active tab found",
-			});
+		let tab: chrome.tabs.Tab & { id: number };
+		try {
+			tab = await browserTarget.get();
+		} catch (error) {
+			respond({ success: false, error: String(error) });
 			return;
 		}
 
@@ -400,11 +395,7 @@ export class NavigateRuntimeProvider implements SandboxRuntimeProvider {
 
 			respond({
 				success: true,
-				result: {
-					finalUrl: result.details.finalUrl,
-					title: result.details.title,
-					skills: result.details.skills,
-				},
+				result: result.details,
 			});
 		} catch (error: any) {
 			console.error("[NavigateRuntimeProvider] Error:", error);

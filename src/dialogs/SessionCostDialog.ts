@@ -1,6 +1,5 @@
 import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { DialogBase } from "@mariozechner/mini-lit/dist/DialogBase.js";
 import { icon } from "@mariozechner/mini-lit/dist/icons.js";
 import { Chart, type ChartConfiguration, registerables } from "chart.js";
@@ -66,10 +65,9 @@ export class SessionCostDialog extends DialogBase {
 		for (const msg of this.messages) {
 			messageIndex++;
 
-			// Only process assistant messages (they have usage/cost data)
-			if (msg.role !== "assistant") continue;
+			if (msg.role !== "assistant" && msg.role !== "conversation-compaction") continue;
 
-			const assistantMsg = msg as AssistantMessage;
+			const assistantMsg = msg;
 
 			// Calculate time delta from last assistant message
 			const timeDelta = lastTimestamp ? (assistantMsg.timestamp - lastTimestamp) / 1000 : undefined;
@@ -88,10 +86,10 @@ export class SessionCostDialog extends DialogBase {
 				cacheReadCost: assistantMsg.usage.cost.cacheRead,
 				cacheWriteCost: assistantMsg.usage.cost.cacheWrite,
 				totalCost: assistantMsg.usage.cost.total,
-				stopReason: assistantMsg.stopReason,
-				errorMessage: assistantMsg.errorMessage,
+				stopReason: assistantMsg.role === "assistant" ? assistantMsg.stopReason : "compaction",
+				errorMessage: assistantMsg.role === "assistant" ? assistantMsg.errorMessage : undefined,
 				provider: assistantMsg.provider,
-				model: assistantMsg.model,
+				model: assistantMsg.role === "assistant" ? assistantMsg.model : assistantMsg.modelId,
 			});
 		}
 

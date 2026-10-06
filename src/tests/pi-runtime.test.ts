@@ -14,11 +14,12 @@ import { AgentInterface, createStreamFn, setAppStorage } from "@earendil-works/p
 import { LitElement } from "lit";
 import { browserMessageTransformer } from "../messages/message-transformer.js";
 import { SitegeistAppStorage } from "../storage/app-storage.js";
+import { browserTarget } from "../tools/browser-target.js";
 import { DebuggerTool } from "../tools/debugger.js";
 import { ResearchPageTool } from "../tools/research-page.js";
-
 import { renderingTests } from "./rendering-tests.js";
 import { assert, type BrowserTest, equal } from "./test-utils.js";
+import { workflowTests } from "./workflow-tests.js";
 
 const tests: BrowserTest[] = [];
 function test(name: string, run: () => Promise<void>) {
@@ -292,7 +293,10 @@ test("research preserves its prompt, inspection cap, turn cap, and final tool-fr
 	Object.defineProperty(globalThis, "chrome", {
 		configurable: true,
 		value: {
-			tabs: { query: async () => [{ id: 1, url: "https://example.test" }] },
+			tabs: {
+				get: async () => ({ id: 1, windowId: 10, url: "https://example.test" }),
+				query: async () => [{ id: 1, windowId: 10, url: "https://example.test" }],
+			},
 			scripting: {
 				executeScript: async () => {
 					inspections++;
@@ -313,6 +317,7 @@ test("research preserves its prompt, inspection cap, turn cap, and final tool-fr
 	});
 	const faux = registerFauxProvider();
 	try {
+		await browserTarget.capture(10);
 		const contexts: TranscriptContext[] = [];
 		faux.setResponses([
 			...Array.from({ length: 8 }, () => (context: TranscriptContext) => {
@@ -388,12 +393,16 @@ test("debugger results retain JSON details for eval and cookies", async () => {
 	Object.defineProperty(globalThis, "chrome", {
 		configurable: true,
 		value: {
-			tabs: { query: async () => [{ id: 1, url: "https://example.test" }] },
+			tabs: {
+				get: async () => ({ id: 1, windowId: 10, url: "https://example.test" }),
+				query: async () => [{ id: 1, windowId: 10, url: "https://example.test" }],
+			},
 			debugger: { attach: async () => {}, sendCommand: async () => value },
 			cookies: { getAll: async () => cookies },
 		},
 	});
 	try {
+		await browserTarget.capture(10);
 		const tool = new DebuggerTool();
 		equal(
 			(await tool.execute("eval", { action: "eval", code: "({ answer: 42 })" })).details.value,
@@ -409,7 +418,7 @@ test("debugger results retain JSON details for eval and cookies", async () => {
 Object.assign(globalThis, {
 	piRuntimeTests: (async () => {
 		const results: { name: string; error?: string }[] = [];
-		for (const { name, run } of [...tests, ...renderingTests]) {
+		for (const { name, run } of [...tests, ...workflowTests, ...renderingTests]) {
 			try {
 				await run();
 				results.push({ name });

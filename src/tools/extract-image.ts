@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-web-ui";
 import { html } from "lit";
 import { Image as ImageIcon } from "lucide";
+import { browserTarget } from "./browser-target.js";
 
 const EXTRACT_IMAGE_DESCRIPTION = `Extract images from the current page. Returns image data that you can see and analyze.
 
@@ -152,7 +153,6 @@ export class ExtractImageTool implements AgentTool<typeof extractImageSchema, Ex
 	label = "Extract Image";
 	description = EXTRACT_IMAGE_DESCRIPTION;
 	parameters = extractImageSchema;
-	windowId?: number;
 
 	async execute(
 		_toolCallId: string,
@@ -165,14 +165,16 @@ export class ExtractImageTool implements AgentTool<typeof extractImageSchema, Ex
 		const details: ExtractImageDetails = { mode: args.mode, selector: args.selector };
 
 		if (args.mode === "screenshot") {
-			if (!this.windowId) throw new Error("windowId not set on ExtractImageTool");
-			const image = await captureScreenshot(maxWidth, this.windowId);
+			// Chrome can capture the selected tab in an unfocused window without stealing focus.
+			const tab = await browserTarget.requireSelected();
+			const image = await captureScreenshot(maxWidth, tab.windowId);
+			if ((await browserTarget.requireSelected()).id !== tab.id)
+				throw new Error("Target changed during screenshot; retry.");
 			content.push(image);
 			content.push({ type: "text", text: `Screenshot captured (max ${maxWidth}px width)` });
 		} else if (args.mode === "selector") {
 			if (!args.selector) throw new Error("selector is required for 'selector' mode");
-			const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-			if (!tab?.id) throw new Error("No active tab");
+			const tab = await browserTarget.get();
 
 			const info = await getImageInfoFromPage(tab.id, args.selector);
 			if (typeof info === "string") throw new Error(info);

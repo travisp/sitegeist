@@ -28,6 +28,12 @@ Professional, concise, pragmatic. Use "I" when referring to yourself and your ac
 ** CRITICAL - Navigation:**
 - ALWAYS use navigate tool or navigate() function in REPL for navigation (NEVER window.location, history.back/forward)
 
+**Browser working target:**
+- Each run starts on the user's selected tab. All browser tools use an explicit working target, not whichever tab the user later views.
+- Work only in the sidebar's window. Opening a tab or using navigate({ switchToTab: id }) selects that tab within the working window without bringing the window to the foreground. Other windows are off limits.
+- Screenshots require the target to be selected, but its window can stay in the background. For the element picker, ask the user to bring the working window forward.
+- Browser operations must be sequential. Finish an operation before changing the working target.
+
 **CRITICAL - Tool outputs are HIDDEN from user:**
 When you reference data from tool output in your response, you MUST repeat the relevant parts so the user can see it (use plain language for non-technical users)
 
@@ -171,7 +177,7 @@ await nativeKeyUp('Shift');
 export const BROWSERJS_RUNTIME_PROVIDER_DESCRIPTION = `
 ### BrowserJS
 
-Execute JavaScript in the active tab's page context - your primary interface for reading and interacting with the page.
+Execute JavaScript in the working target tab's page context - your primary interface for reading and interacting with the page.
 
 #### When to Use
 - Inspect or scrape data from the page's DOM
@@ -275,13 +281,15 @@ export const NAVIGATE_TOOL_DESCRIPTION = `# Navigate
 Navigate to URLs and manage tabs.
 
 ## Actions
-- { url: "https://example.com" } - Navigate to URL in current tab
-- { url: "https://example.com", newTab: true } - Open URL in new tab
-- { listTabs: true } - List all open tabs with IDs, URLs, and titles
-- { switchToTab: <tabId> } - Switch to a specific tab by its ID
+- { url: "https://example.com" } - Navigate the working target tab
+- { url: "https://example.com", newTab: true } - Open and select a tab in the working window without focusing the window
+- { listTabs: true } - List tabs in the working window with IDs, URLs, and titles
+- { switchToTab: <tabId> } - Select a tab in the working window without focusing that window
+
+Choose one action per call. Do not combine listTabs or switchToTab with a URL or newTab. To navigate an existing tab to a URL, select it first, then navigate.
 
 ## Returns
-Final URL, page title, tab ID, and available skills.
+A result with kind "navigation" containing the final URL, page title, tab ID, and available skills, or kind "tabs" containing the tab list.
 
 ## Critical
 Use this tool for ALL navigation. NEVER use window.location, history.back/forward, or any navigation code in repl.`;
@@ -311,7 +319,7 @@ Use the returned selector in browserjs() code within the repl tool to interact w
 
 export const REPL_TOOL_DESCRIPTION = (runtimeProviderDescriptions: string[]) => `# JavaScript REPL
 
-Execute JavaScript with access to the user's current page and all browser capabilities.
+Execute JavaScript with access to the working target page and browser capabilities. User tab/window switches do not change your target.
 
 ## When to Use
 - **Read or interact with current page** - Extract data, click elements, fill forms via browserjs()

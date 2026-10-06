@@ -18,15 +18,16 @@ import { createRef, ref } from "lit/directives/ref.js";
 import { Code } from "lucide";
 import { REPL_TOOL_DESCRIPTION } from "../../prompts/prompts.js";
 import "../../utils/i18n-extension.js";
-import { injectOverlayForActiveTab, removeOverlayForActiveTab } from "./overlay-inject.js";
+import { browserTarget } from "../browser-target.js";
+import { injectOverlay, removeOverlay } from "./overlay-inject.js";
 
 // Execute JavaScript code with attachments using SandboxedIframe
-export async function executeJavaScript(
+async function executeJavaScript(
 	code: string,
 	runtimeProviders: SandboxRuntimeProvider[],
+	taskName: string,
 	signal?: AbortSignal,
 	sandboxUrlProvider?: () => string,
-	taskName?: string,
 ): Promise<{ output: string; files?: SandboxFile[] }> {
 	if (!code) {
 		throw new Error("Code parameter is required");
@@ -57,16 +58,11 @@ export async function executeJavaScript(
 		throw new Error("Execution aborted");
 	}
 
-	// Only inject overlay if code uses browserjs() (interacts with active tab)
-	const usesBrowserjs = code.includes("browserjs(");
+	// Remember the injection tab: navigation can change the target before cleanup.
 	let overlayTabId: number | undefined;
-	if (usesBrowserjs) {
-		try {
-			overlayTabId = await injectOverlayForActiveTab(taskName || "Executing JavaScript");
-		} catch (error) {
-			console.warn("[REPL] Failed to inject overlay:", error);
-			// Continue execution even if overlay fails
-		}
+	if (code.includes("browserjs(")) {
+		overlayTabId = (await browserTarget.get()).id;
+		await injectOverlay(overlayTabId, taskName);
 	}
 
 	// Create a SandboxedIframe instance for execution
@@ -83,9 +79,6 @@ export async function executeJavaScript(
 		// Pass providers to execute (router handles all message routing)
 		// No additional consumers needed - execute() has its own internal consumer
 		const result: SandboxResult = await sandbox.execute(sandboxId, code, runtimeProviders, [], signal);
-
-		// Remove the sandbox iframe after execution
-		sandbox.remove();
 
 		// Build plain text response
 		let output = "";
@@ -125,22 +118,15 @@ export async function executeJavaScript(
 			}
 		}
 
-		// Remove overlay on success (if it was injected)
-		if (usesBrowserjs) {
-			await removeOverlayForActiveTab();
-		}
-
 		return {
 			output: output.trim() || "Code executed successfully (no output)",
 			files: result.files,
 		};
-	} catch (error: unknown) {
-		// Clean up on error
+	} finally {
 		sandbox.remove();
-		if (usesBrowserjs) {
-			await removeOverlayForActiveTab();
+		if (overlayTabId !== undefined) {
+			await removeOverlay(overlayTabId);
 		}
-		throw new Error((error as Error).message || "Execution failed");
 	}
 }
 
@@ -202,85 +188,48 @@ const replSchema = Type.Object({
 
 export type ReplParams = Static<typeof replSchema>;
 
-interface ReplResult {
-	rawOutput?: string;
-	files?: Array<{
-		fileName: string;
-		mimeType: string;
-		size: number;
-		contentBase64: string;
-	}>;
-}
-
-export function createReplTool(): AgentTool<typeof replSchema, ReplToolResult> & {
-	runtimeProvidersFactory?: () => SandboxRuntimeProvider[];
+type ReplTool = AgentTool<typeof replSchema, ReplToolResult> & {
+	runtimeProvidersFactory: () => SandboxRuntimeProvider[];
 	sandboxUrlProvider?: () => string;
-} {
-	const tool: AgentTool<typeof replSchema, ReplToolResult> & {
-		runtimeProvidersFactory?: () => SandboxRuntimeProvider[];
-		sandboxUrlProvider?: () => string;
-	} = {
+};
+
+export function createReplTool(): ReplTool {
+	const tool: ReplTool = {
 		label: "JavaScript REPL",
 		name: "repl",
-		runtimeProvidersFactory: () => [], // default to empty array
-		sandboxUrlProvider: undefined, // optional, for browser extensions
+		runtimeProvidersFactory: () => [],
 		get description() {
 			// Dynamically get provider descriptions
-			const runtimeProviderDescriptions =
-				tool
-					.runtimeProvidersFactory?.()
-					.map((d) => d.getDescription())
-					.filter((d) => d.trim().length > 0) || [];
+			const runtimeProviderDescriptions = tool
+				.runtimeProvidersFactory()
+				.map((provider) => provider.getDescription())
+				.filter((description) => description.trim().length > 0);
 			// Inject into template
 			return REPL_TOOL_DESCRIPTION(runtimeProviderDescriptions);
 		},
 		parameters: replSchema,
-		execute: async function (toolCallId: string, args: Static<typeof replSchema>, signal?: AbortSignal) {
+		execute: async (toolCallId, args, signal) => {
 			const result = await executeJavaScript(
 				args.code,
-				this.runtimeProvidersFactory?.() ?? [],
-				signal,
-				this.sandboxUrlProvider,
+				tool.runtimeProvidersFactory(),
 				args.title,
+				signal,
+				tool.sandboxUrlProvider,
 			);
 			// Convert files to JSON-serializable with base64 payloads
-			const files = (result.files || []).map((f) => {
-				const toBase64 = (input: string | Uint8Array): { base64: string; size: number } => {
-					if (input instanceof Uint8Array) {
-						let binary = "";
-						const chunk = 0x8000;
-						for (let i = 0; i < input.length; i += chunk) {
-							binary += String.fromCharCode(...input.subarray(i, i + chunk));
-						}
-						return { base64: btoa(binary), size: input.length };
-					} else if (typeof input === "string") {
-						const enc = new TextEncoder();
-						const bytes = enc.encode(input);
-						let binary = "";
-						const chunk = 0x8000;
-						for (let i = 0; i < bytes.length; i += chunk) {
-							binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-						}
-						return { base64: btoa(binary), size: bytes.length };
-					} else {
-						const s = String(input);
-						const enc = new TextEncoder();
-						const bytes = enc.encode(s);
-						let binary = "";
-						const chunk = 0x8000;
-						for (let i = 0; i < bytes.length; i += chunk) {
-							binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-						}
-						return { base64: btoa(binary), size: bytes.length };
-					}
-				};
-
-				const { base64, size } = toBase64(f.content);
+			const files = (result.files ?? []).map((file) => {
+				const bytes = typeof file.content === "string" ? new TextEncoder().encode(file.content) : file.content;
+				let binary = "";
+				// Chunk the spread to stay below JavaScript's argument-count limit for large files.
+				const chunkSize = 0x8000;
+				for (let i = 0; i < bytes.length; i += chunkSize) {
+					binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+				}
 				return {
-					fileName: f.fileName || "file",
-					mimeType: f.mimeType || "application/octet-stream",
-					size,
-					contentBase64: base64,
+					fileName: file.fileName,
+					mimeType: file.mimeType,
+					size: bytes.length,
+					contentBase64: btoa(binary),
 				};
 			});
 			const modelOutput = compactReplOutputForModel(result.output, toolCallId);
@@ -297,13 +246,10 @@ export function createReplTool(): AgentTool<typeof replSchema, ReplToolResult> &
 	return tool;
 }
 
-// Export a default instance for backward compatibility
-export const javascriptReplTool = createReplTool();
-
-export const javascriptReplRenderer: ToolRenderer<ReplParams, ReplResult> = {
+export const javascriptReplRenderer: ToolRenderer<ReplParams, ReplToolResult> = {
 	render(
 		params: ReplParams | undefined,
-		result: ToolResultMessage<ReplResult> | undefined,
+		result: ToolResultMessage<ReplToolResult> | undefined,
 		isStreaming?: boolean,
 	): ToolRenderResult {
 		// Determine status

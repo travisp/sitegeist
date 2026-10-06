@@ -25,6 +25,7 @@ import {
 import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { SearchCode } from "lucide";
+import { browserTarget } from "./browser-target.js";
 
 const RESEARCH_MAX_TURNS = 8;
 const RESEARCH_MAX_INSPECTIONS = 5;
@@ -315,8 +316,7 @@ function lastAssistantText(messages: AgentMessage[]): string {
 }
 
 async function captureSnapshot(query?: string): Promise<PageSnapshot> {
-	const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-	if (!tab?.id) throw new Error("No active tab");
+	const tab = await browserTarget.get();
 	if (!tab.url || tab.url.startsWith("chrome://") || tab.url.startsWith("chrome-extension://")) {
 		throw new Error("Cannot research this page");
 	}

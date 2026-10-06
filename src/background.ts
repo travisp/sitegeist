@@ -14,7 +14,7 @@ if (chrome.runtime.onUserScriptMessage) {
 	chrome.runtime.onUserScriptMessage.addListener((message, sender, sendResponse) => {
 		console.log("[Background] Received userScript message:", message, "from:", sender);
 		if (message.type === "abort-repl") {
-			// Forward to all open sidepanels (they'll check if they're streaming)
+			// Only the sidebar owning this overlay run will handle the abort.
 			console.log("[Background] Relaying abort-repl to sidepanels");
 			chrome.runtime.sendMessage(message);
 			sendResponse({ success: true });

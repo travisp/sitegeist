@@ -2,32 +2,25 @@ import { icon } from "@mariozechner/mini-lit";
 import { Button } from "@mariozechner/mini-lit/dist/Button.js";
 import { Input } from "@mariozechner/mini-lit/dist/Input.js";
 import "@mariozechner/mini-lit/dist/ThemeToggle.js";
-import {
-	Agent,
-	type AgentEvent,
-	type AgentMessage,
-	type AgentState,
-	type AgentTool,
-	estimateContextTokens,
-} from "@earendil-works/pi-agent-core";
-import type { Model, TextContent, UserMessage } from "@earendil-works/pi-ai";
+import { Agent, type AgentState, type AgentTool } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
 import { getModel, getModels } from "@earendil-works/pi-ai/compat";
 import {
 	ChatPanel,
 	createExtractDocumentTool,
 	createStreamFn,
 	formatTokenCount,
-	isUserMessageWithAttachments,
 	ModelSelector,
 	ProxyTab,
+	registerMessageRenderer,
 	SettingsDialog,
 	// PersistentStorageDialog,
 	setAppStorage,
 	setShowJsonMode,
-	type UserMessageWithAttachments,
 } from "@earendil-works/pi-web-ui";
 import { html, render } from "lit";
 import { History, Plus, Settings } from "lucide";
+import { Toast } from "./components/Toast.js";
 import { AboutTab } from "./dialogs/AboutTab.js";
 import { ApiKeyOrOAuthDialog } from "./dialogs/ApiKeyOrOAuthDialog.js";
 import { ApiKeysOAuthTab } from "./dialogs/ApiKeysOAuthTab.js";
@@ -38,22 +31,22 @@ import { SkillsTab } from "./dialogs/SkillsTab.js";
 import { UpdateNotificationDialog } from "./dialogs/UpdateNotificationDialog.js";
 import { UserScriptsPermissionDialog } from "./dialogs/UserScriptsPermissionDialog.js";
 import { WelcomeSetupDialog } from "./dialogs/WelcomeSetupDialog.js";
+import { estimateConversationTokens } from "./messages/compaction.js";
 import { browserMessageTransformer } from "./messages/message-transformer.js";
-import {
-	createNavigationMessage,
-	type NavigationMessage,
-	registerNavigationRenderer,
-} from "./messages/NavigationMessage.js";
+import { createNavigationMessage, registerNavigationRenderer } from "./messages/NavigationMessage.js";
 import { registerUserMessageRenderer } from "./messages/UserMessageRenderer.js";
 import { createWelcomeMessage, registerWelcomeRenderer } from "./messages/WelcomeMessage.js";
 import { isOAuthCredentials, resolveApiKey } from "./oauth/index.js";
 import { SYSTEM_PROMPT } from "./prompts/prompts.js";
+import { isUserMessage, Session, type SessionOptions } from "./session.js";
 import { SitegeistAppStorage } from "./storage/app-storage.js";
+import { browserTarget } from "./tools/browser-target.js";
 import { DebuggerTool } from "./tools/debugger.js";
 import { ExtractImageTool, registerExtractImageRenderer } from "./tools/extract-image.js";
 import { AskUserWhichElementTool, ReadRawToolResultTool, ResearchPageTool, skillTool } from "./tools/index.js";
 import { NativeInputEventsRuntimeProvider } from "./tools/NativeInputEventsRuntimeProvider.js";
-import { isToolNavigating, NavigateTool } from "./tools/navigate.js";
+import { isToolNavigating, type NavigateResult, NavigateTool } from "./tools/navigate.js";
+import { ownsOverlayRun } from "./tools/repl/overlay-inject.js";
 import { createReplTool } from "./tools/repl/repl.js";
 import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "./tools/repl/runtime-providers.js";
 import * as port from "./utils/port.js";
@@ -73,11 +66,15 @@ function schedulePostAgentEndUpdate() {
 // Register custom message renderers
 registerNavigationRenderer();
 registerExtractImageRenderer();
+registerMessageRenderer("conversation-compaction", {
+	render: (message) =>
+		html`<details class="mx-4 my-2 text-xs text-muted-foreground"><summary>Conversation compacted (original history retained)</summary><pre class="whitespace-pre-wrap">${message.summary}</pre></details>`,
+});
 
 // Listen for abort messages from REPL overlay
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 	console.log("[Sidepanel] Received message:", message, "from:", sender);
-	if (message.type === "abort-repl") {
+	if (message.type === "abort-repl" && ownsOverlayRun(message.runId)) {
 		console.log("[Sidepanel] Abort-repl message received, agent streaming:", agent?.state.isStreaming);
 		if (agent?.state.isStreaming) {
 			console.log("[Sidepanel] Aborting agent...");
@@ -100,21 +97,12 @@ setAppStorage(storage);
 // ============================================================================
 // APP STATE
 // ============================================================================
-let currentSessionId: string | undefined;
-let currentTitle = "";
+let session: Session;
 let isEditingTitle = false;
 let agent: Agent;
 let chatPanel: ChatPanel;
 let agentUnsubscribe: (() => void) | undefined;
 let currentWindowId: number;
-
-// Track which skills we've shown in full (skillName -> lastUpdated timestamp)
-// Reset when a new session/agent is created
-const shownSkills = new Map<string, string>();
-
-// Track which messages we've already recorded costs for (avoid duplicates)
-// Use Set with message object identity (not cleared on session switch - persists in memory)
-const recordedCostMessages = new Set<AgentMessage>();
 
 // Cached auth type label for the current provider
 let authLabel = "";
@@ -228,141 +216,21 @@ async function getApiKeyForProvider(provider: string): Promise<string | undefine
 	return resolveApiKey(stored, provider, storage.providerKeys);
 }
 
-// Export getter for message transformer
-export function getShownSkills(): Map<string, string> {
-	return shownSkills;
-}
-
 // ============================================================================
 // HELPERS
 // ============================================================================
-type UserLikeMessage = UserMessage | UserMessageWithAttachments;
-
-const isUserMessage = (message: AgentMessage): message is UserLikeMessage =>
-	message.role === "user" || isUserMessageWithAttachments(message);
-
-const getMessageText = (message: UserLikeMessage | undefined): string => {
-	if (!message) return "";
-	const { content } = message;
-	if (typeof content === "string") return content;
-	return content
-		.filter((c): c is TextContent => c.type === "text")
-		.map((c) => c.text)
-		.join(" ");
-};
-
-const generateTitle = (messages: AgentMessage[]): string => {
-	const text = getMessageText(messages.find(isUserMessage)).trim();
-	if (!text) return "";
-
-	const sentenceEnd = text.search(/[.!?]/);
-	if (sentenceEnd > 0 && sentenceEnd <= 50) {
-		return text.substring(0, sentenceEnd + 1);
-	}
-	return text.length <= 50 ? text : `${text.substring(0, 47)}...`;
-};
-
-const shouldSaveSession = (messages: AgentMessage[]): boolean => {
-	const hasUserMsg = messages.some(isUserMessage);
-	const hasAssistantMsg = messages.some((m: AgentMessage) => m.role === "assistant");
-	return hasUserMsg && hasAssistantMsg;
-};
-
-const saveSession = async () => {
-	if (!storage.sessions || !currentSessionId || !agent || !currentTitle) return;
-
-	const state = agent.state;
-	if (!shouldSaveSession(state.messages)) return;
-
-	try {
-		// Calculate cumulative usage from all assistant messages
-		const usage = {
-			input: 0,
-			output: 0,
-			cacheRead: 0,
-			cacheWrite: 0,
-			totalTokens: 0,
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-		};
-
-		for (const msg of state.messages) {
-			if (msg.role === "assistant") {
-				usage.input += msg.usage.input;
-				usage.output += msg.usage.output;
-				usage.cacheRead += msg.usage.cacheRead;
-				usage.cacheWrite += msg.usage.cacheWrite;
-				usage.totalTokens += msg.usage.input + msg.usage.output + msg.usage.cacheRead + msg.usage.cacheWrite;
-				if (msg.usage.cost) {
-					usage.cost.input += msg.usage.cost.input;
-					usage.cost.output += msg.usage.cost.output;
-					usage.cost.cacheRead += msg.usage.cost.cacheRead;
-					usage.cost.cacheWrite += msg.usage.cost.cacheWrite;
-					usage.cost.total += msg.usage.cost.total;
-				}
-			}
-		}
-
-		// Generate preview text (first 2KB of user + assistant text)
-		let preview = "";
-		for (const msg of state.messages) {
-			if (preview.length >= 2048) break;
-			if (isUserMessage(msg)) {
-				preview += `${getMessageText(msg)}\n`;
-			} else if (msg.role === "assistant") {
-				const text = msg.content
-					.filter((c) => c.type === "text" || c.type === "thinking")
-					.map((c) => (c.type === "text" ? c.text : c.thinking))
-					.join("\n");
-				preview += `${text}\n`;
-			}
-		}
-		preview = preview.substring(0, 2048);
-
-		// Preserve createdAt if session already exists
-		const existingMetadata = await storage.sessions.getMetadata(currentSessionId);
-		const createdAt = existingMetadata?.createdAt || new Date().toISOString();
-
-		const metadata = {
-			id: currentSessionId,
-			title: currentTitle,
-			createdAt,
-			lastModified: new Date().toISOString(),
-			messageCount: state.messages.length,
-			usage,
-			modelId: state.model.id,
-			thinkingLevel: state.thinkingLevel,
-			preview,
-		};
-
-		await storage.sessions.saveSession(currentSessionId, state, metadata, currentTitle);
-	} catch (err) {
-		console.error("Failed to save session:", err);
-	}
-};
-
 const updateUrl = (sessionId: string) => {
 	const url = new URL(window.location.href);
 	url.searchParams.set("session", sessionId);
 	window.history.replaceState({}, "", url);
 };
 
-const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true) => {
+const createAgent = async (initialState?: Partial<AgentState>, options: SessionOptions = {}) => {
+	await session?.compaction.wait();
+	await session?.flush();
 	if (agentUnsubscribe) {
 		agentUnsubscribe();
 	}
-
-	// Mark all loaded messages as already recorded (by object identity)
-	for (const msg of initialState?.messages || []) {
-		if (msg.role === "assistant" && msg.usage?.cost?.total > 0) {
-			recordedCostMessages.add(msg);
-		}
-	}
-
-	// Reset skill tracking for new session
-	// When loading an old session, we intentionally don't reconstruct shownSkills
-	// This ensures that new navigations in the continued session show the LATEST
-	// version of skills, even if they were updated since the session was created
-	shownSkills.clear();
 
 	// Load debugger mode setting
 	const stored = await chrome.storage.local.get("debuggerMode");
@@ -398,8 +266,7 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 	}
 
 	const streamFn = createStreamFn(getEnabledProxyUrl);
-
-	agent = new Agent({
+	const agentInstance = new Agent({
 		initialState: initialState || {
 			systemPrompt: SYSTEM_PROMPT,
 			model: defaultModel,
@@ -412,71 +279,38 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 		streamFn,
 		getApiKey: getApiKeyForProvider,
 	});
-
+	const sessionInstance = new Session(
+		agentInstance,
+		{
+			storage,
+			onCreated: (id) => {
+				void port
+					.sendMessage({ type: "acquireLock", sessionId: id, windowId: currentWindowId })
+					.then((response) => {
+						if (!response.success) console.warn("Failed to acquire lock for newly created session", id);
+					});
+				updateUrl(id);
+			},
+			onChange: () => {
+				chatPanel.agentInterface?.requestUpdate();
+				renderApp();
+			},
+		},
+		options,
+	);
+	agent = agentInstance;
+	session = sessionInstance;
 	await updateAuthLabel();
 
-	agentUnsubscribe = agent.subscribe((event: AgentEvent) => {
+	agentUnsubscribe = agentInstance.subscribe(async (event) => {
 		if (event.type === "message_end") {
-			agent.state.messages = agent.state.messages.slice();
+			agentInstance.state.messages = agentInstance.state.messages.slice();
 		}
-
-		if (event.type === "agent_end") {
-			schedulePostAgentEndUpdate();
-		}
-
-		if (shouldSave) {
-			const messages = agent.state.messages;
-
-			storage.settings
-				.set("lastUsedModel", agent.state.model)
-				.catch((err) => console.error("Failed to save lastUsedModel:", err));
-
-			// Update auth label when model changes
-			updateAuthLabel().catch(() => {});
-
-			if (
-				event.type === "message_end" &&
-				event.message.role === "assistant" &&
-				event.message.usage?.cost?.total > 0
-			) {
-				if (!recordedCostMessages.has(event.message)) {
-					recordedCostMessages.add(event.message);
-					storage.costs
-						.recordCost(agent.state.model.provider, agent.state.model.id, event.message.usage.cost.total)
-						.catch((err) => console.error("Failed to record cost:", err));
-				}
-			}
-
-			if (!currentTitle && shouldSaveSession(messages)) {
-				currentTitle = generateTitle(messages);
-			}
-
-			if (!currentSessionId && shouldSaveSession(messages)) {
-				currentSessionId = crypto.randomUUID();
-
-				port
-					.sendMessage({
-						type: "acquireLock",
-						sessionId: currentSessionId,
-						windowId: currentWindowId,
-					})
-					.then((lockResponse) => {
-						if (!lockResponse.success) {
-							console.warn("Failed to acquire lock for newly created session", currentSessionId);
-						}
-					});
-				updateUrl(currentSessionId);
-			}
-
-			if (currentSessionId) {
-				saveSession();
-			}
-
-			renderApp();
-		}
+		if (event.type === "agent_end") schedulePostAgentEndUpdate();
+		await sessionInstance.handleEvent(event);
 	});
 
-	await chatPanel.setAgent(agent, {
+	await chatPanel.setAgent(agentInstance, {
 		sandboxUrlProvider: () => {
 			return chrome.runtime.getURL("sandbox.html");
 		},
@@ -490,9 +324,11 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 				return;
 			}
 			ModelSelector.open(
-				agent.state.model,
+				agentInstance.state.model,
 				(model) => {
-					agent.state.model = model;
+					agentInstance.state.model = model;
+					void storage.settings.set("lastUsedModel", model);
+					void sessionInstance.flush();
 					chatPanel.agentInterface?.requestUpdate();
 					updateAuthLabel().catch(() => {});
 					renderApp();
@@ -501,41 +337,47 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			);
 		},
 		onBeforeSend: async () => {
-			if (!agent) return;
+			if (agentInstance.state.isStreaming) return;
+			await sessionInstance.compaction.wait();
 
-			// Get current tab info
-			const [tab] = await chrome.tabs.query({
-				active: true,
-				currentWindow: true,
-			});
-			if (!tab?.url || tab.url.startsWith("chrome-extension://") || tab.url.startsWith("moz-extension://")) return;
+			const tab = await browserTarget.capture(currentWindowId);
+			if (!tab.url || tab.url.startsWith("chrome-extension://") || tab.url.startsWith("moz-extension://")) return;
 
 			// Find most recent navigation (either nav message or nav tool result)
 			let lastUrl: string | undefined;
-			for (let i = agent.state.messages.length - 1; i >= 0; i--) {
-				const msg = agent.state.messages[i];
+			let lastTabId: number | undefined;
+			for (let i = agentInstance.state.messages.length - 1; i >= 0; i--) {
+				const msg = agentInstance.state.messages[i];
 				if (msg.role === "navigation") {
-					lastUrl = (msg as NavigationMessage).url;
+					lastUrl = msg.url;
+					lastTabId = msg.tabId;
 					break;
 				}
-				if (msg.role === "toolResult" && (msg as any).toolName === "navigate") {
-					lastUrl = (msg as any).details?.finalUrl;
-					break;
+				if (msg.role === "toolResult" && msg.toolName === "navigate") {
+					const details = msg.details as NavigateResult | undefined;
+					if (details?.kind === "navigation") {
+						lastUrl = details.finalUrl;
+						lastTabId = details.tabId;
+						break;
+					}
 				}
 			}
 
-			// Only add if URL changed
-			if (!lastUrl || lastUrl !== tab.url) {
-				const navMessage = await createNavigationMessage(tab.url, tab.title || "Untitled", tab.favIconUrl, tab.id);
-				agent.state.messages = [...agent.state.messages, navMessage];
+			// Distinguish tabs even when they have identical URLs.
+			if (lastUrl !== tab.url || lastTabId !== tab.id) {
+				const navMessage = await createNavigationMessage(
+					sessionInstance.skills,
+					tab.url,
+					tab.title || "Untitled",
+					tab.favIconUrl,
+					tab.id,
+				);
+				agentInstance.state.messages = [...agentInstance.state.messages, navMessage];
 			}
 		},
-		onCostClick: () => {
-			if (!agent) return;
-			SessionCostDialog.open(agent.state.messages);
-		},
+		onCostClick: () => SessionCostDialog.open(agentInstance.state.messages),
 		toolsFactory: (agentInstance, _agentInterface, _artifactsPanel, runtimeProvidersFactory) => {
-			const navigateTool = new NavigateTool();
+			const navigateTool = new NavigateTool(sessionInstance.skills);
 			const selectElementTool = new AskUserWhichElementTool();
 
 			// Create extract_document tool with CORS proxy from settings (loaded above)
@@ -563,7 +405,6 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 			};
 
 			const extractImageTool = new ExtractImageTool();
-			extractImageTool.windowId = currentWindowId;
 
 			const readRawToolResultTool = new ReadRawToolResultTool(() => agentInstance.state.messages);
 			const researchPageTool = new ResearchPageTool(() => agentInstance.state.model, getApiKeyForProvider, streamFn);
@@ -591,18 +432,18 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 
 	// Register custom message renderers after agentInterface is available
 	if (chatPanel.agentInterface) {
-		registerWelcomeRenderer(agent, chatPanel.agentInterface);
+		registerWelcomeRenderer(agentInstance, chatPanel.agentInterface);
 
 		// Only disable auto-scroll for new sessions with welcome message
 		// Check if this is a fresh session (only has welcome message, no user messages)
-		const hasUserMessage = agent.state.messages.some(isUserMessage);
+		const hasUserMessage = agentInstance.state.messages.some(isUserMessage);
 		if (!hasUserMessage) {
 			chatPanel.agentInterface.setAutoScroll(false);
 
 			// Re-enable auto-scroll on first user message
 			let unsubscribe: (() => void) | undefined;
-			unsubscribe = agent.subscribe(() => {
-				const hasUserMsg = agent.state.messages.some(isUserMessage);
+			unsubscribe = agentInstance.subscribe(() => {
+				const hasUserMsg = agentInstance.state.messages.some(isUserMessage);
 				if (hasUserMsg && unsubscribe) {
 					chatPanel.agentInterface?.setAutoScroll(true);
 					unsubscribe();
@@ -612,19 +453,41 @@ const createAgent = async (initialState?: Partial<AgentState>, shouldSave = true
 	}
 };
 
-const loadSession = (sessionId: string) => {
+const loadSession = async (sessionId: string) => {
+	await session.compaction.wait();
+	await session.flush();
 	// Navigation will disconnect port and auto-release locks
 	const url = new URL(window.location.href);
 	url.searchParams.set("session", sessionId);
 	window.location.href = url.toString();
 };
 
-const newSession = () => {
+const newSession = async () => {
+	await session?.compaction.wait();
+	await session?.flush();
 	// Navigation will disconnect port and auto-release locks
 	const url = new URL(window.location.href);
 	url.search = "?new=true";
 	window.location.href = url.toString();
 };
+
+async function showWorkingTab(): Promise<void> {
+	try {
+		await browserTarget.show();
+	} catch (error) {
+		Toast.error(String(error));
+	}
+}
+
+async function compactConversation(): Promise<void> {
+	try {
+		if (!(await session.compact())) {
+			Toast.show("Not enough older history to compact yet.");
+		}
+	} catch (error) {
+		Toast.error(`Compaction failed: ${String(error)}`);
+	}
+}
 
 // ============================================================================
 // RENDER
@@ -633,13 +496,22 @@ function renderContextUsage() {
 	if (!agent) return "";
 
 	const { contextWindow } = agent.state.model;
-	const { tokens } = estimateContextTokens(agent.state.messages);
+	const tokens = estimateConversationTokens(agent.state.messages);
 	const percent = (tokens / contextWindow) * 100;
 	const colorClass = percent > 90 ? "text-destructive" : percent > 70 ? "text-warning" : "text-muted-foreground";
 	const title = `Estimated current context if you send now: ${tokens.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`;
 
 	return html`
 		<div class="shrink-0 px-3 pb-1 text-xs flex justify-end">
+			${
+				agent.state.isStreaming && browserTarget.tabId !== undefined
+					? html`<button class="mr-auto text-muted-foreground hover:text-foreground"
+				title="Working target; click to show this tab"
+				@click=${showWorkingTab}>Tab ${browserTarget.tabId}</button>`
+					: ""
+			}
+			<button class="mr-2 hover:text-foreground disabled:opacity-50" ?disabled=${agent.state.isStreaming || session.isCompacting}
+				@click=${compactConversation}>${session.isCompacting ? "Compacting…" : "Compact"}</button>
 			<span class=${colorClass} title=${title}>Ctx ${percent.toFixed(1)}%/${formatTokenCount(contextWindow)}</span>
 		</div>
 	`;
@@ -662,7 +534,7 @@ const renderApp = () => {
 								},
 								(deletedSessionId: string) => {
 									// Only reload if the current session was deleted
-									if (deletedSessionId === currentSessionId) {
+									if (deletedSessionId === session?.id) {
 										newSession();
 									}
 								},
@@ -679,30 +551,19 @@ const renderApp = () => {
 					})}
 
 					${
-						currentTitle
+						session?.title
 							? isEditingTitle
 								? html`<div class="flex items-center gap-2">
 									${Input({
 										type: "text",
-										value: currentTitle,
+										value: session.title,
 										className: "text-sm w-48",
-										/*
-										TODO need to add this in Input in mini-lit
-										onBlur: async (e: Event) => {
-											const newTitle = (e.target as HTMLInputElement).value.trim();
-											if (newTitle && newTitle !== currentTitle && storage.sessions && currentSessionId) {
-												await storage.sessions.updateTitle(currentSessionId, newTitle);
-												currentTitle = newTitle;
-											}
-											isEditingTitle = false;
-											renderApp();
-										},*/
 										onKeyDown: async (e: KeyboardEvent) => {
 											if (e.key === "Enter") {
 												const newTitle = (e.target as HTMLInputElement).value.trim();
-												if (newTitle && newTitle !== currentTitle && storage.sessions && currentSessionId) {
-													await storage.sessions.updateTitle(currentSessionId, newTitle);
-													currentTitle = newTitle;
+												if (newTitle && newTitle !== session.title) {
+													session.title = newTitle;
+													await session.flush();
 												}
 												isEditingTitle = false;
 												renderApp();
@@ -728,7 +589,7 @@ const renderApp = () => {
 									}}
 									title="Click to edit title"
 								>
-									${currentTitle}
+									${session.title}
 								</button>`
 							: html``
 					}
@@ -768,46 +629,31 @@ const renderApp = () => {
 
 // Listen for tab updates and insert navigation messages only when agent is running
 chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
-	// Only care about URL changes on the active tab while agent is working
-	// Ignore chrome-extension:// URLs (extension internal pages)
-	// Ignore tool-initiated navigations (handled by the navigate tool itself)
-	// Ignore tabs from other windows
+	// Follow navigation on the working target, including background tabs in other windows.
+	// Tool-initiated navigations already include their context in the tool result.
 	if (
 		changeInfo.url &&
-		tab.active &&
-		tab.url &&
-		tab.windowId === currentWindowId &&
-		agent?.state.isStreaming &&
-		!tab.url.startsWith("chrome-extension://") &&
-		!tab.url.startsWith("moz-extension://") &&
-		!isToolNavigating()
-	) {
-		const navMessage = await createNavigationMessage(tab.url, tab.title || "Untitled", tab.favIconUrl, tab.id);
-		agent.steer(navMessage);
-		console.log("Queued navigation message for tab switch to", tab.url);
-	}
-});
-
-// Listen for tab activation (user switches tabs) only when agent is running
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-	// Ignore tab activations from other windows
-	if (activeInfo.windowId !== currentWindowId) return;
-
-	const tab = await chrome.tabs.get(activeInfo.tabId);
-	// Ignore chrome-extension:// URLs (extension internal pages)
-	// Ignore tool-initiated navigations (handled by the navigate tool itself)
-	if (
+		tab.id === browserTarget.tabId &&
 		tab.url &&
 		agent?.state.isStreaming &&
 		!tab.url.startsWith("chrome-extension://") &&
 		!tab.url.startsWith("moz-extension://") &&
 		!isToolNavigating()
 	) {
-		const navMessage = await createNavigationMessage(tab.url, tab.title || "Untitled", tab.favIconUrl, tab.id);
-		agent.steer(navMessage);
+		const owner = session;
+		const navMessage = await createNavigationMessage(
+			owner.skills,
+			tab.url,
+			tab.title || "Untitled",
+			tab.favIconUrl,
+			tab.id,
+		);
+		owner.agent.steer(navMessage);
 		console.log("Queued navigation message for tab switch to", tab.url);
 	}
 });
+
+// Tab activation is deliberately not an agent event: browsing must not retarget a running task.
 
 // ============================================================================
 // KEYBOARD SHORTCUTS
@@ -817,6 +663,7 @@ window.addEventListener(
 	(e) => {
 		// Escape key to abort streaming - works globally in sidepanel
 		// Use capturing phase to intercept before MessageEditor handles it
+		if (e.key === "Escape") session?.cancelCompaction();
 		if (e.key === "Escape" && agent?.state.isStreaming) {
 			e.preventDefault();
 			e.stopPropagation();
@@ -867,7 +714,7 @@ async function testSteps(): Promise<boolean> {
 			}
 		}
 
-		await createAgent(initialState, false);
+		await createAgent(initialState, { persist: false });
 		renderApp();
 
 		// Wait for UI to render
@@ -1044,17 +891,17 @@ async function initApp() {
 				return;
 			}
 
-			currentSessionId = sessionIdFromUrl;
 			const metadata = await storage.sessions.getMetadata(sessionIdFromUrl);
-			currentTitle = metadata?.title || "";
-
-			await createAgent({
-				systemPrompt: SYSTEM_PROMPT,
-				model: sessionData.model,
-				thinkingLevel: sessionData.thinkingLevel,
-				messages: sessionData.messages,
-				tools: [],
-			});
+			await createAgent(
+				{
+					systemPrompt: SYSTEM_PROMPT,
+					model: sessionData.model,
+					thinkingLevel: sessionData.thinkingLevel,
+					messages: sessionData.messages,
+					tools: [],
+				},
+				{ id: sessionIdFromUrl, title: metadata?.title },
+			);
 
 			renderApp();
 			return;

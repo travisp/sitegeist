@@ -5,7 +5,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { SkillPill } from "../components/SkillPill.js";
 import { getSitegeistStorage } from "../storage/app-storage.js";
 import type { Skill } from "../storage/stores/skills-store.js";
-import { formatSkills } from "../utils/format-skills.js";
+import type { SkillDisclosure } from "../utils/format-skills.js";
 
 // ============================================================================
 // NAVIGATION MESSAGE TYPE
@@ -118,6 +118,7 @@ export function registerNavigationRenderer() {
 // ============================================================================
 
 export async function createNavigationMessage(
+	skills: SkillDisclosure,
 	url: string,
 	title: string,
 	favicon?: string,
@@ -126,7 +127,7 @@ export async function createNavigationMessage(
 	// Get skills for this URL and format them
 	const skillsRepo = getSitegeistStorage().skills;
 	const matchingSkills = await skillsRepo.getSkillsForUrl(url);
-	const { formattedText: skillsOutput } = formatSkills(matchingSkills);
+	const skillsOutput = skills.format(matchingSkills);
 
 	return {
 		role: "navigation",

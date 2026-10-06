@@ -16,8 +16,8 @@
 		"prepare": "husky"
 	},
 	"dependencies": {
-		"@earendil-works/pi-agent-core": "0.87.1",
-		"@earendil-works/pi-ai": "0.87.1",
+		"@earendil-works/pi-agent-core": "1.0.4",
+		"@earendil-works/pi-ai": "1.0.4",
 		"@earendil-works/pi-web-ui": "0.75.3",
 		"@mariozechner/jailjs": "^0.1.0",
 		"@mariozechner/mini-lit": "file:../mini-lit",
@@ -48,8 +48,8 @@
 		"ws": "^8.18.0"
 	},
 	"overrides": {
-		"@earendil-works/pi-ai": "0.87.1",
-		"@earendil-works/pi-tui": "0.87.1",
+		"@earendil-works/pi-ai": "1.0.4",
+		"@earendil-works/pi-tui": "1.0.4",
 		"docx-preview": "$docx-preview",
 		"lucide": "$lucide",
 		"pdfjs-dist": "$pdfjs-dist"

@@ -67,6 +67,18 @@ On first launch, Sitegeist prompts you to connect at least one AI provider. You 
 
 Some subscription logins require the CORS proxy (configurable in Settings > Proxy). The default proxy is `https://proxy.mariozechner.at/proxy`.
 
+## Browser targets and long conversations
+
+Each sidebar works only in its own window. Tasks start on that window's selected tab; opening or selecting a working tab makes it visible within that window without bringing the window to the foreground. Tab listings and target selection are limited to this window, so you can browse in other windows undisturbed. This also applies to the REPL's `navigate()` helper. Click the working-tab button in the sidebar to explicitly bring the window forward. Moving the target to another window stops access to it until you select a tab in the working window.
+
+Screenshots require the target to be the selected tab in its window, but that window can be unfocused. The element picker requires a focused, selected target. Neither silently captures or interacts with another tab. Background websites can still throttle execution or require focus, and closing the sidebar does not keep an agent running.
+
+Long conversations compact automatically before model requests, including between tool turns. **Compact** in the footer triggers this manually; Escape cancels summarization. Sitegeist retains recent messages without splitting tool-call/result batches and generates a browser-focused summary using the current model and existing credentials. The default budgets reserve 16,384 tokens and retain about 20,000 recent tokens, capped at a quarter of the model's context window for smaller models.
+
+Compaction keeps the original conversation, artifacts, and raw outputs in session storage and exports. Only the context sent to the model becomes a summary plus recent messages. The existing REPL output previews and raw-output reader are unchanged. Summaries appear as expandable conversation entries, and their usage is included in session costs. Failed or cancelled summarization leaves the conversation intact. This is proactive compaction, not automatic recovery from every provider context-overflow error.
+
+Sessions save after completed messages and at most once per two seconds during continuous streaming. Partial responses are restored as interrupted text, without unfinished tool calls.
+
 ## Checks
 
 ```bash
@@ -85,7 +97,7 @@ With Chrome running with remote debugging enabled on port 9222:
 devbox run -- npm run test:pi-runtime
 ```
 
-Set `CHROME_DEBUG_URL` to use another debugging endpoint. The tests open and close an isolated tab, bundle the extension in memory using its production build options, and exercise Pi with the pinned web UI. Model responses and provider HTTP requests are mocked; no credentials or live API calls are used. The tests also cover PDF/DOCX/XLSX extraction, document previews, Markdown/math, diffs, icons, and both Three.js animations using generated fixtures. The tests do not write to `dist-chrome/` or reload the extension.
+Set `CHROME_DEBUG_URL` to use another debugging endpoint. The tests open and close an isolated background tab without requesting browser activation. DevTools focus emulation keeps rendering tests running without selecting the tab. They bundle the extension in memory using its production build options, and exercise Pi with the pinned web UI. Model responses and provider HTTP requests are mocked; no credentials or live API calls are used. The tests also cover PDF/DOCX/XLSX extraction, document previews, Markdown/math, diffs, icons, and both Three.js animations using generated fixtures. The tests do not write to `dist-chrome/` or reload the extension.
 
 ## Building
 

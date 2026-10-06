@@ -4,6 +4,10 @@
 
 ### Added
 
+- Added window-scoped browser working targets: automation selects its tabs within the sidebar's window without focusing that window or accessing tabs in other windows.
+- Added automatic and manual conversation compaction, preserving original history, raw tool results, and summary checkpoints across session reloads.
+- Added regression coverage for tab targeting, background navigation, compaction, and serialized session checkpoints.
+
 - Added a page research tool for asking focused questions about current-page mechanics without carrying full snapshots in model context.
 - Added raw REPL output compaction with a reader tool for searching or slicing omitted output without carrying full dumps in model context.
 - Added an estimated current context usage indicator to the sidebar footer.
@@ -12,8 +16,19 @@
 
 ### Changed
 
-- Upgraded the pi runtime packages to 0.87.1 while retaining pi-web-ui 0.75.3 through pi-ai's compatibility entry point.
+- Consolidated working-window validation and tab selection; navigation results stay bound to the tab that was navigated.
+- Upgraded the pi runtime packages and bundled model catalog to 1.0.4 while retaining pi-web-ui 0.75.3 through pi-ai's compatibility entry point.
+- Replaced removed Pi compaction helpers with local context estimation, tool-safe history boundaries, and browser-focused summaries through the existing chat transport.
+- Simplified compaction text formatting, usage estimation, and summary requests; removed redundant snapshot copying and the generic provider-error fallback.
 - Migrated page research to transcript-based system prompts and Pi's completed-turn hook.
+- Session persistence now saves message boundaries and coalesced streaming checkpoints with serialized writes, including the initial user message and interrupted response text.
+- Simplified browser target handling, navigation results, compaction preparation, and persistence snapshots; removed unused overlay helpers and consolidated REPL cleanup.
+- Moved persistence, cost accounting, and compaction lifecycle into a session-scoped owner; separated pure compaction preparation from provider requests.
+- Simplified background browser tests with scoped tab ownership, session-bound page commands, and standard event waiting.
+- Scoped skill disclosure tracking to each session, simplified navigation skill results, and recorded completed-message costs directly from their own provider/model metadata.
+- Simplified skill text assembly and normalized CDP errors at the protocol boundary so request cleanup handles a single error shape.
+- Navigation now rejects conflicting actions and distinguishes tab-list results from navigation results; browser target selection is private and protected against stale asynchronous reads.
+- Browser screenshots and element picking validate their target instead of silently using a different visible tab; navigation reports closed tabs, errors, and timeouts.
 - Refreshed compatible extension and website dependencies to address known dependency vulnerabilities.
 - Synchronized linked mini-lit dependency metadata after its Claude Code and Vitest security updates.
 - Added a Devbox environment with Node.js 24 for dependency management and checks.
@@ -23,6 +38,9 @@
 
 ### Fixed
 
+- Browser integration test runner now closes lingering HTTP connections and waits for server shutdown instead of hanging after reporting results.
+- Browser test CDP requests now clear pending timers on failure and stop waiting immediately when Chrome disconnects.
+- Browser integration tests now request a background tab and emulate page focus for rendering instead of activating the test tab.
 - Markdown and other file attachments now reach the model in Sitegeist's custom message transformer.
 - Live chat rendering now updates after message events that mutate the message array in place.
 - Sidebar no longer remains visually stuck in streaming mode after `agent_end` fires before the agent clears runtime state.

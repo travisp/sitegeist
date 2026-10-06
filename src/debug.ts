@@ -8,6 +8,7 @@ import { ArrowLeft, Bug, MousePointer2, Play, Sparkles } from "lucide";
 import "./debug/ReplPanel.js";
 import { SitegeistAppStorage } from "./storage/app-storage.js";
 import { askUserWhichElementTool } from "./tools/ask-user-which-element.js";
+import { browserTarget } from "./tools/browser-target.js";
 
 interface TestPrompt {
 	name: string;
@@ -84,6 +85,8 @@ const renderDebugPage = async () => {
 
 	const triggerSelectElement = async () => {
 		try {
+			const window = await chrome.windows.getCurrent();
+			await browserTarget.capture(window.id!);
 			const result = await askUserWhichElementTool.execute("debug-test", {});
 			console.log("[debug] Select element result:", result);
 			const text = result.content.find((c) => c.type === "text")?.text || "No output";

@@ -1,10 +1,11 @@
 import type { SandboxRuntimeProvider } from "@earendil-works/pi-web-ui";
 import { NATIVE_INPUT_EVENTS_DESCRIPTION } from "../prompts/prompts.js";
+import { browserTarget } from "./browser-target.js";
 
 /**
  * Provides native input event functions to JavaScript REPL using Chrome Debugger API.
  * Dispatches REAL browser events (isTrusted: true) for automation of anti-bot sites.
- * Operates on the currently active tab.
+ * Operates on the run's explicitly selected target tab.
  */
 export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider {
 	private modifiers = 0; // Track currently pressed modifiers
@@ -16,17 +17,6 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 
 	getData(): Record<string, any> {
 		return {};
-	}
-
-	/**
-	 * Get the currently active tab ID
-	 */
-	private async getActiveTabId(): Promise<number> {
-		const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-		if (!tab?.id) {
-			throw new Error("No active tab found");
-		}
-		return tab.id;
 	}
 
 	private getKeyInfo(key: string): { key: string; code: string; keyCode: number } {
@@ -177,8 +167,13 @@ export class NativeInputEventsRuntimeProvider implements SandboxRuntimeProvider 
 
 		console.log("[NativeInput] Received event:", message.action, message);
 
-		// Get active tab ID once at the start
-		const tabId = await this.getActiveTabId();
+		let tabId: number;
+		try {
+			tabId = (await browserTarget.get()).id;
+		} catch (error) {
+			respond({ success: false, error: String(error) });
+			return;
+		}
 
 		try {
 			// Attach debugger to tab

@@ -17,6 +17,7 @@ import {
 import { html } from "lit";
 import { createRef, ref } from "lit/directives/ref.js";
 import { Bug } from "lucide";
+import { browserTarget } from "./browser-target.js";
 
 // ============================================================================
 // TYPES
@@ -80,15 +81,7 @@ CRITICAL: Use browserjs() and repl tool for DOM manipulation. Use this ONLY for 
 			throw new Error("Debugger command aborted");
 		}
 
-		// Get active tab
-		const [tab] = await chrome.tabs.query({
-			active: true,
-			currentWindow: true,
-		});
-
-		if (!tab?.id) {
-			throw new Error("No active tab found");
-		}
+		const tab = await browserTarget.get();
 
 		try {
 			// Handle cookies action

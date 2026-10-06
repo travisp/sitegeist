@@ -2,7 +2,7 @@
  * This code gets stringified and injected into the page context.
  * Creates a full-viewport overlay with shimmer effect and abort button.
  */
-export function createOverlayScript(taskName: string): string {
+export function createOverlayScript(taskName: string, runId: string): string {
 	return `
 (function() {
 	// Check if overlay already exists (prevent duplicates)
@@ -245,7 +245,7 @@ export function createOverlayScript(taskName: string): string {
 		// Send message BEFORE removing overlay
 		try {
 			console.log('[Overlay] Calling sendMessage...');
-			const response = await chrome.runtime.sendMessage({ type: 'abort-repl' });
+			const response = await chrome.runtime.sendMessage({ type: 'abort-repl', runId: ${JSON.stringify(runId)} });
 			console.log('[Overlay] Got response:', response);
 		} catch (error) {
 			console.error('[Overlay] sendMessage failed:', error);

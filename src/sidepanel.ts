@@ -49,19 +49,10 @@ import { isToolNavigating, type NavigateResult, NavigateTool } from "./tools/nav
 import { ownsOverlayRun } from "./tools/repl/overlay-inject.js";
 import { createReplTool } from "./tools/repl/repl.js";
 import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "./tools/repl/runtime-providers.js";
-import * as port from "./utils/port.js";
+import { sidepanelPort as port } from "./utils/port.js";
 import "./utils/i18n-extension.js";
 import "./utils/live-reload.js";
 import { tutorials } from "./tutorials.js";
-
-function schedulePostAgentEndUpdate() {
-	setTimeout(() => {
-		if (!agent) return;
-		chatPanel?.agentInterface?.requestUpdate();
-		chatPanel?.requestUpdate();
-		renderApp();
-	}, 0);
-}
 
 // Register custom message renderers
 registerNavigationRenderer();
@@ -284,11 +275,9 @@ const createAgent = async (initialState?: Partial<AgentState>, options: SessionO
 		{
 			storage,
 			onCreated: (id) => {
-				void port
-					.sendMessage({ type: "acquireLock", sessionId: id, windowId: currentWindowId })
-					.then((response) => {
-						if (!response.success) console.warn("Failed to acquire lock for newly created session", id);
-					});
+				void port.sendMessage({ type: "acquireLock", sessionId: id }).then((response) => {
+					if (!response.success) console.warn("Failed to acquire lock for newly created session", id);
+				});
 				updateUrl(id);
 			},
 			onChange: () => {
@@ -306,7 +295,6 @@ const createAgent = async (initialState?: Partial<AgentState>, options: SessionO
 		if (event.type === "message_end") {
 			agentInstance.state.messages = agentInstance.state.messages.slice();
 		}
-		if (event.type === "agent_end") schedulePostAgentEndUpdate();
 		await sessionInstance.handleEvent(event);
 	});
 
@@ -858,7 +846,6 @@ async function initApp() {
 			const lockResponse = await port.sendMessage({
 				type: "acquireLock",
 				sessionId: latestSessionId,
-				windowId: currentWindowId,
 			});
 
 			if (lockResponse.success) {
@@ -877,7 +864,6 @@ async function initApp() {
 			const lockResponse = await port.sendMessage({
 				type: "acquireLock",
 				sessionId: sessionIdFromUrl,
-				windowId: currentWindowId,
 			});
 
 			if (!lockResponse.success) {

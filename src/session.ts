@@ -109,6 +109,11 @@ export class Session {
 	}
 
 	async handleEvent(event: AgentEvent): Promise<void> {
+		if (event.type === "agent_end") {
+			// The runtime clears streaming state only after every event listener settles.
+			// Schedule the final UI notification without making this listener wait for itself.
+			void this.agent.waitForIdle().then(() => this.services.onChange());
+		}
 		if (!this.persist) return;
 		const { messages } = this.agent.state;
 		if (event.type === "message_end" && event.message.role === "assistant" && event.message.usage.cost.total > 0) {

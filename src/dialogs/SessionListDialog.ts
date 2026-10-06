@@ -6,7 +6,7 @@ import i18n from "@mariozechner/mini-lit/dist/i18n.js";
 import Fuse from "fuse.js";
 import { html } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import * as port from "../utils/port.js";
+import { sidepanelPort as port } from "../utils/port.js";
 
 type ExportedSession = {
 	session: SessionData;

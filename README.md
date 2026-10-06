@@ -89,6 +89,14 @@ Runs formatting, linting, and type checking for the extension and the `site/` su
 
 The Husky pre-commit hook runs the same checks before each commit.
 
+### Session lock tests
+
+```bash
+devbox run -- npm run test:session-locks
+```
+
+Tests simultaneous session access, connection ownership, startup restoration, request correlation, and reconnect cleanup without a browser. These tests also run in the browser integration suite.
+
 ### Pi runtime and rendering integration tests
 
 With Chrome running with remote debugging enabled on port 9222:

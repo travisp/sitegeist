@@ -12,6 +12,7 @@
 		"dev": "concurrently -n \"build,css,server\" -c \"blue,green,yellow\" \"node ./scripts/build.mjs --watch\" \"tailwindcss -i ./src/app.css -o ./dist-chrome/app.css --watch\" \"node ./scripts/dev-server.mjs\"",
 		"typecheck": "tsc --noEmit",
 		"test:pi-runtime": "node scripts/test-pi-runtime.mjs",
+		"test:session-locks": "node scripts/test-session-locks.mjs",
 		"check": "biome check --write . && tsc --noEmit && cd site && npm run check",
 		"prepare": "husky"
 	},

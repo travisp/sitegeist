@@ -38,6 +38,8 @@
 
 ### Fixed
 
+- Refresh the message editor after the agent actually becomes idle, so slow final saves cannot leave the Stop button visible or block new messages.
+- Serialized session lock acquisition and release across sidebars, retained the initial port connection, and matched concurrent replies by request ID. Locks remain held until the last connection in their window closes.
 - Browser integration test runner now closes lingering HTTP connections and waits for server shutdown instead of hanging after reporting results.
 - Browser test CDP requests now clear pending timers on failure and stop waiting immediately when Chrome disconnects.
 - Browser integration tests now request a background tab and emulate page focus for rendering instead of activating the test tab.

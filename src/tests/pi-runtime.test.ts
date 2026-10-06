@@ -10,14 +10,16 @@ import {
 	Type,
 } from "@earendil-works/pi-ai";
 import { getModel, registerFauxProvider } from "@earendil-works/pi-ai/compat";
-import { AgentInterface, createStreamFn, setAppStorage } from "@earendil-works/pi-web-ui";
+import { AgentInterface, createStreamFn, type MessageEditor, setAppStorage } from "@earendil-works/pi-web-ui";
 import { LitElement } from "lit";
 import { browserMessageTransformer } from "../messages/message-transformer.js";
+import { Session } from "../session.js";
 import { SitegeistAppStorage } from "../storage/app-storage.js";
 import { browserTarget } from "../tools/browser-target.js";
 import { DebuggerTool } from "../tools/debugger.js";
 import { ResearchPageTool } from "../tools/research-page.js";
 import { renderingTests } from "./rendering-tests.js";
+import { sessionLockTests } from "./session-lock-tests.js";
 import { assert, type BrowserTest, equal } from "./test-utils.js";
 import { workflowTests } from "./workflow-tests.js";
 
@@ -222,6 +224,81 @@ test("agent cancellation during streaming settles the run", async () => {
 	}
 });
 
+test("session completion refreshes the editor after slow final listeners settle", async () => {
+	for (const persist of [true, false]) {
+		const faux = registerFauxProvider();
+		const view = new AgentInterface();
+		const save = storage.sessions.save;
+		let release!: () => void;
+		let started!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const waiting = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		let ending = false;
+		let id: string | undefined;
+		const agent = new Agent({ initialState: { model: faux.getModel() }, streamFn, getApiKey: () => "test-key" });
+		const session = new Session(
+			agent,
+			{
+				storage,
+				onCreated: (created) => {
+					id = created;
+				},
+				onChange: () => view.requestUpdate(),
+			},
+			{ persist },
+		);
+		storage.sessions.save = async (data, metadata) => {
+			if (ending) {
+				started();
+				await gate;
+			}
+			return save.call(storage.sessions, data, metadata);
+		};
+		agent.subscribe(async (event) => {
+			if (event.type === "agent_end") ending = true;
+			await session.handleEvent(event);
+			if (ending && !persist) {
+				started();
+				await gate;
+			}
+		});
+		view.session = agent;
+		document.body.append(view);
+		let running: Promise<void> | undefined;
+		try {
+			await view.updateComplete;
+			const editor = view.querySelector<MessageEditor>("message-editor");
+			assert(editor, "message editor rendered");
+			faux.setResponses([fauxAssistantMessage("Finished")]);
+			running = agent.prompt("Complete the request");
+			await waiting;
+			// Let a timer-based refresh run while the final listener is still waiting.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			await view.updateComplete;
+			await editor.updateComplete;
+			assert(agent.state.isStreaming && editor.isStreaming, "run and editor remain active during final listener");
+			release();
+			await running;
+			await view.updateComplete;
+			await editor.updateComplete;
+			assert(!agent.state.isStreaming, "agent is idle");
+			assert(!editor.isStreaming, "editor leaves Stop mode without another event or manual refresh");
+			equal(editor.value, "", "editor remains usable after completion");
+		} finally {
+			release();
+			await running?.catch(() => {});
+			storage.sessions.save = save;
+			view.remove();
+			if (id) await storage.sessions.delete(id);
+			faux.unregister();
+		}
+	}
+});
+
 test("session storage and the pinned UI preserve a restored system transcript", async () => {
 	const faux = registerFauxProvider();
 	const id = crypto.randomUUID();
@@ -418,7 +495,7 @@ test("debugger results retain JSON details for eval and cookies", async () => {
 Object.assign(globalThis, {
 	piRuntimeTests: (async () => {
 		const results: { name: string; error?: string }[] = [];
-		for (const { name, run } of [...tests, ...workflowTests, ...renderingTests]) {
+		for (const { name, run } of [...tests, ...sessionLockTests, ...workflowTests, ...renderingTests]) {
 			try {
 				await run();
 				results.push({ name });

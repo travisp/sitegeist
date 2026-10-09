@@ -154,6 +154,24 @@ export const renderingTests: BrowserTest[] = [
 		},
 	},
 	{
+		name: "Markdown keeps currency readable alongside inline math",
+		async run() {
+			const markdown = new MarkdownBlock();
+			const sentence =
+				"$114 for a full year would imply an amortizable basis of about $1,710, rather than the full original total.";
+			markdown.content = `${sentence}\n\nPay $5 or $10 for $x^2$ and $2 + 2$.`;
+			document.body.append(markdown);
+			try {
+				await markdown.updateComplete;
+				equal(markdown.querySelector("p")?.textContent, sentence, "currency and spaces preserved");
+				equal(markdown.querySelectorAll(".katex").length, 2, "only actual equations rendered as math");
+				assert(markdown.textContent?.includes("Pay $5 or $10 for "), "currency alongside math preserved");
+			} finally {
+				markdown.remove();
+			}
+		},
+	},
+	{
 		name: "mini-lit diff rendering and Lucide icons work with the updated libraries",
 		async run() {
 			const host = document.createElement("div");

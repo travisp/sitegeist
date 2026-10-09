@@ -42,6 +42,7 @@
 
 ### Fixed
 
+- Currency amounts in Markdown no longer render intervening prose as italicized math with missing spaces.
 - Sandboxed artifact links now open only HTTP(S) websites, preventing generated HTML from opening privileged extension pages or executable URL schemes.
 - Session artifact reconstruction ignores textual command failures, and navigation rejects artifact viewer destinations before changing browser tabs.
 - Live spreadsheet updates retain the selected worksheet and reading position.

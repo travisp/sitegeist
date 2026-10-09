@@ -18,6 +18,8 @@ import { SitegeistAppStorage } from "../storage/app-storage.js";
 import { browserTarget } from "../tools/browser-target.js";
 import { DebuggerTool } from "../tools/debugger.js";
 import { ResearchPageTool } from "../tools/research-page.js";
+import { artifactViewerTests } from "./artifact-viewer-tests.js";
+import { artifactWorkflowTests } from "./artifact-workflow-tests.js";
 import { renderingTests } from "./rendering-tests.js";
 import { sessionLockTests } from "./session-lock-tests.js";
 import { assert, type BrowserTest, equal } from "./test-utils.js";
@@ -495,7 +497,14 @@ test("debugger results retain JSON details for eval and cookies", async () => {
 Object.assign(globalThis, {
 	piRuntimeTests: (async () => {
 		const results: { name: string; error?: string }[] = [];
-		for (const { name, run } of [...tests, ...sessionLockTests, ...workflowTests, ...renderingTests]) {
+		for (const { name, run } of [
+			...tests,
+			...sessionLockTests,
+			...workflowTests,
+			...renderingTests,
+			...artifactViewerTests,
+			...artifactWorkflowTests,
+		]) {
 			try {
 				await run();
 				results.push({ name });

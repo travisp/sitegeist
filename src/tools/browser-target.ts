@@ -1,3 +1,5 @@
+import { isArtifactViewerUrl } from "../artifacts/protocol.js";
+
 export type TargetTab = chrome.tabs.Tab & { id: number };
 
 /** One working window per sidebar. Selecting its tabs never focuses the window. */
@@ -15,6 +17,11 @@ export class BrowserTarget {
 	async capture(windowId: number): Promise<TargetTab> {
 		const [tab] = await chrome.tabs.query({ active: true, windowId });
 		if (tab?.id === undefined) throw new Error("No active tab in the sidebar's window");
+		// Reviewing an artifact must not replace the website the agent is working on.
+		if (isArtifactViewerUrl(tab.url)) {
+			if (this.selection?.windowId === windowId) return this.get();
+			throw new Error("Select a website tab before starting a task. Artifact viewers are not browser targets.");
+		}
 		this.selection = { tabId: tab.id, windowId: tab.windowId };
 		return { ...tab, id: tab.id };
 	}
@@ -39,6 +46,7 @@ export class BrowserTarget {
 		if (tab.windowId !== windowId) {
 			throw new Error(`Tab ${tabId} is outside the working window. Select or open a tab in window ${windowId}.`);
 		}
+		if (isArtifactViewerUrl(tab.url)) throw new Error("Artifact viewers cannot be used as browser targets.");
 		return { ...tab, id: tabId };
 	}
 

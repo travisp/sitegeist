@@ -16,6 +16,40 @@ const piWebUiCompatPlugin = {
 				resolveDir: args.resolveDir,
 			});
 		});
+		// Sandboxed HTML may open websites, never privileged extension pages or executable URL schemes.
+		build.onLoad({ filter: /\/SandboxedIframe\.js$/ }, async (args) => {
+			if (!args.path.includes("/@earendil-works/pi-web-ui/dist/")) return;
+			const source = await readFile(args.path, "utf8");
+			const condition = 'e.data.type === "open-external-url" && e.source === this.iframe?.contentWindow';
+			if (source.split(condition).length !== 3) {
+				throw new Error(`Expected two sandbox URL handlers in ${args.path}; review the pinned web UI adaptation`);
+			}
+			return {
+				contents: source.replaceAll(
+					condition,
+					`${condition} && typeof e.data.url === "string" && /^https?:\\/\\//i.test(e.data.url)`,
+				),
+				loader: "js",
+			};
+		});
+		// Artifact commands report validation errors as text; do not replay those failures on session restore.
+		build.onLoad({ filter: /\/artifacts\.js$/ }, async (args) => {
+			if (!args.path.includes("/@earendil-works/pi-web-ui/dist/tools/artifacts/")) return;
+			const source = await readFile(args.path, "utf8");
+			const condition = 'm.role === "toolResult" && m.toolName === artifactToolName && !m.isError';
+			if (source.split(condition).length !== 2) {
+				throw new Error(
+					`Expected one artifact replay condition in ${args.path}; review the pinned web UI adaptation`,
+				);
+			}
+			return {
+				contents: source.replace(
+					condition,
+					`${condition} && !m.content.some((block) => block.type === "text" && block.text.startsWith("Error:"))`,
+				),
+				loader: "js",
+			};
+		});
 		// PDF.js 6 moved document destruction to its loading task. Adapt the pinned web UI's three callers.
 		build.onLoad({ filter: /\/(attachment-utils|AttachmentOverlay|PdfArtifact)\.js$/ }, async (args) => {
 			if (!args.path.includes("/@earendil-works/pi-web-ui/dist/")) return;
@@ -34,6 +68,7 @@ export function createBuildOptions(isWatch = false) {
 		absWorkingDir: packageRoot,
 		entryPoints: {
 			sidepanel: join(packageRoot, "src/sidepanel.ts"),
+			artifact: join(packageRoot, "src/artifact.ts"),
 			debug: join(packageRoot, "src/debug.ts"),
 			icons: join(packageRoot, "src/icons.ts"),
 			background: join(packageRoot, "src/background.ts"),

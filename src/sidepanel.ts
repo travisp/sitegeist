@@ -6,7 +6,6 @@ import { Agent, type AgentState, type AgentTool } from "@earendil-works/pi-agent
 import type { Model } from "@earendil-works/pi-ai";
 import { getModel, getModels } from "@earendil-works/pi-ai/compat";
 import {
-	ChatPanel,
 	createExtractDocumentTool,
 	createStreamFn,
 	formatTokenCount,
@@ -20,6 +19,9 @@ import {
 } from "@earendil-works/pi-web-ui";
 import { html, render } from "lit";
 import { History, Plus, Settings } from "lucide";
+import { openArtifactViewer } from "./artifacts/open-viewer.js";
+import { ArtifactPublisher } from "./artifacts/publisher.js";
+import { SitegeistChatPanel } from "./components/SitegeistChatPanel.js";
 import { Toast } from "./components/Toast.js";
 import { AboutTab } from "./dialogs/AboutTab.js";
 import { ApiKeyOrOAuthDialog } from "./dialogs/ApiKeyOrOAuthDialog.js";
@@ -91,7 +93,9 @@ setAppStorage(storage);
 let session: Session;
 let isEditingTitle = false;
 let agent: Agent;
-let chatPanel: ChatPanel;
+let chatPanel: SitegeistChatPanel;
+let artifactPublisher: ArtifactPublisher | undefined;
+window.addEventListener("pagehide", () => artifactPublisher?.close());
 let agentUnsubscribe: (() => void) | undefined;
 let currentWindowId: number;
 
@@ -219,6 +223,9 @@ const updateUrl = (sessionId: string) => {
 const createAgent = async (initialState?: Partial<AgentState>, options: SessionOptions = {}) => {
 	await session?.compaction.wait();
 	await session?.flush();
+	artifactPublisher?.close();
+	artifactPublisher = undefined;
+	chatPanel.onArtifactsUpdated = undefined;
 	if (agentUnsubscribe) {
 		agentUnsubscribe();
 	}
@@ -270,6 +277,8 @@ const createAgent = async (initialState?: Partial<AgentState>, options: SessionO
 		streamFn,
 		getApiKey: getApiKeyForProvider,
 	});
+	let publisher: ArtifactPublisher | undefined;
+	const liveSessionId = `live-${crypto.randomUUID()}`;
 	const sessionInstance = new Session(
 		agentInstance,
 		{
@@ -279,6 +288,7 @@ const createAgent = async (initialState?: Partial<AgentState>, options: SessionO
 					if (!response.success) console.warn("Failed to acquire lock for newly created session", id);
 				});
 				updateUrl(id);
+				publisher?.connect(id);
 			},
 			onChange: () => {
 				chatPanel.agentInterface?.requestUpdate();
@@ -296,6 +306,7 @@ const createAgent = async (initialState?: Partial<AgentState>, options: SessionO
 			agentInstance.state.messages = agentInstance.state.messages.slice();
 		}
 		await sessionInstance.handleEvent(event);
+		if (event.type === "message_end" && event.message.role === "user-with-attachments") publisher?.publish();
 	});
 
 	await chatPanel.setAgent(agentInstance, {
@@ -417,6 +428,27 @@ const createAgent = async (initialState?: Partial<AgentState>, options: SessionO
 			return tools;
 		},
 	});
+
+	const artifactsPanel = chatPanel.artifactsPanel!;
+	const livePublisher = new ArtifactPublisher(() => ({
+		artifacts: Object.fromEntries(
+			Array.from(artifactsPanel.artifacts, ([filename, artifact]) => [filename, artifact.content]),
+		),
+		attachments: agentInstance.state.messages.flatMap((message) =>
+			message.role === "user-with-attachments" ? (message.attachments ?? []) : [],
+		),
+	}));
+	publisher = livePublisher;
+	artifactPublisher = livePublisher;
+	livePublisher.connect(sessionInstance.id ?? liveSessionId);
+	chatPanel.onArtifactsUpdated = () => livePublisher.publish();
+	chatPanel.onOpenInTab = (filename) => {
+		void openArtifactViewer(sessionInstance.id ?? liveSessionId, filename, currentWindowId).catch(
+			(error: unknown) => {
+				Toast.error(`Could not open artifact: ${String(error)}`);
+			},
+		);
+	};
 
 	// Register custom message renderers after agentInterface is available
 	if (chatPanel.agentInterface) {
@@ -826,7 +858,7 @@ async function initApp() {
 	await storage.settings.set("proxy.enabled", false);
 
 	// Create ChatPanel
-	chatPanel = new ChatPanel();
+	chatPanel = new SitegeistChatPanel();
 
 	// Handle test steps
 	if (await testSteps()) {

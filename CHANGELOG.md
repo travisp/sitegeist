@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added live artifact viewer tabs that can move between windows, reuse existing viewers, and load saved files without starting another agent. HTML app updates require an explicit reload.
+
 - Added window-scoped browser working targets: automation selects its tabs within the sidebar's window without focusing that window or accessing tabs in other windows.
 - Added automatic and manual conversation compaction, preserving original history, raw tool results, and summary checkpoints across session reloads.
 - Added regression coverage for tab targeting, background navigation, compaction, and serialized session checkpoints.
@@ -16,6 +18,8 @@
 
 ### Changed
 
+- New artifacts no longer automatically cover the conversation. The artifact list and tool results offer Open in tab; sidebar previews remain available on demand.
+- Separated artifact rendering, snapshot-only HTML access, live connections, and reading-position restoration; consolidated file errors and replayed saved artifacts in a single pass.
 - Consolidated working-window validation and tab selection; navigation results stay bound to the tab that was navigated.
 - Upgraded the pi runtime packages and bundled model catalog to 1.0.4 while retaining pi-web-ui 0.75.3 through pi-ai's compatibility entry point.
 - Replaced removed Pi compaction helpers with local context estimation, tool-safe history boundaries, and browser-focused summaries through the existing chat transport.
@@ -38,6 +42,9 @@
 
 ### Fixed
 
+- Sandboxed artifact links now open only HTTP(S) websites, preventing generated HTML from opening privileged extension pages or executable URL schemes.
+- Session artifact reconstruction ignores textual command failures, and navigation rejects artifact viewer destinations before changing browser tabs.
+- Live spreadsheet updates retain the selected worksheet and reading position.
 - Refresh the message editor after the agent actually becomes idle, so slow final saves cannot leave the Stop button visible or block new messages.
 - Serialized session lock acquisition and release across sidebars, retained the initial port connection, and matched concurrent replies by request ID. Locks remain held until the last connection in their window closes.
 - Browser integration test runner now closes lingering HTTP connections and waits for server shutdown instead of hanging after reporting results.

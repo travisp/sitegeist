@@ -67,6 +67,14 @@ On first launch, Sitegeist prompts you to connect at least one AI provider. You 
 
 Some subscription logins require the CORS proxy (configurable in Settings > Proxy). The default proxy is `https://proxy.mariozechner.at/proxy`.
 
+## Artifact viewers
+
+New artifacts leave the conversation visible. Expand **Artifacts** to preview a file in the sidebar or choose **Open in tab**; artifact tool results also offer **Open in tab**. Downloads remain available in the viewer.
+
+Viewer tabs receive live updates and can be dragged into another browser window without changing the agent's working target. Opening the same artifact again focuses its existing viewer. Ordinary document updates preserve scroll position; HTML apps show **Updated — reload to apply changes** rather than restarting automatically. HTML previews retain the extension's sandbox and read-only access to the session's files and attachments.
+
+Closing a viewer does not delete the file. Saved artifacts can be reloaded without opening a conversation or starting another agent. Closing the sidebar still stops the agent; an already-open viewer retains its last received content.
+
 ## Browser targets and long conversations
 
 Each sidebar works only in its own window. Tasks start on that window's selected tab; opening or selecting a working tab makes it visible within that window without bringing the window to the foreground. Tab listings and target selection are limited to this window, so you can browse in other windows undisturbed. This also applies to the REPL's `navigate()` helper. Click the working-tab button in the sidebar to explicitly bring the window forward. Moving the target to another window stops access to it until you select a tab in the working window.

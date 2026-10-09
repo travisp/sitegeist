@@ -4,6 +4,7 @@ import { registerToolRenderer, type ToolRenderer, type ToolRenderResult } from "
 import { i18n, icon } from "@mariozechner/mini-lit";
 import { html } from "lit";
 import { Loader2 } from "lucide";
+import { isArtifactViewerUrl } from "../artifacts/protocol.js";
 import { SkillPill } from "../components/SkillPill.js";
 import { TabPill } from "../components/TabPill.js";
 import { NAVIGATE_TOOL_DESCRIPTION } from "../prompts/prompts.js";
@@ -100,6 +101,9 @@ export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateRe
 		signal?.throwIfAborted();
 		const action = parseNavigateAction(params as NavigateParams);
 		if (action.kind === "list") return this.listTabs();
+		if (action.kind === "navigate" && isArtifactViewerUrl(action.url)) {
+			throw new Error("Artifact viewers cannot be used as browser targets.");
+		}
 
 		isNavigating = true;
 		try {
@@ -195,7 +199,7 @@ export class NavigateTool implements AgentTool<typeof navigateSchema, NavigateRe
 		const tabInfos: TabInfo[] = tabs
 			.filter(
 				(t: chrome.tabs.Tab): t is chrome.tabs.Tab & { id: number; url: string } =>
-					t.id !== undefined && t.url !== undefined,
+					t.id !== undefined && t.url !== undefined && !isArtifactViewerUrl(t.url),
 			)
 			.map((t: chrome.tabs.Tab & { id: number; url: string }) => ({
 				id: t.id,

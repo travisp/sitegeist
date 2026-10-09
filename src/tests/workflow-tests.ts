@@ -28,7 +28,11 @@ import { ExtractImageTool } from "../tools/extract-image.js";
 import { NativeInputEventsRuntimeProvider } from "../tools/NativeInputEventsRuntimeProvider.js";
 import { NavigateTool, parseNavigateAction } from "../tools/navigate.js";
 import { createReplTool } from "../tools/repl/repl.js";
-import { BrowserJsRuntimeProvider, NavigateRuntimeProvider } from "../tools/repl/runtime-providers.js";
+import {
+	type BrowserJsHelper,
+	BrowserJsRuntimeProvider,
+	NavigateRuntimeProvider,
+} from "../tools/repl/runtime-providers.js";
 import { SkillDisclosure } from "../utils/format-skills.js";
 import { assert, type BrowserTest, equal } from "./test-utils.js";
 
@@ -723,7 +727,61 @@ test("REPL preserves files and raw output and cleans up after success or failure
 	}
 });
 
-test("browser tools stay on their target across tab and window switches", async () => {
+test("serialized browserjs helpers discover frames, forward arguments, and surface errors", async () => {
+	const fields = ["sendRuntimeMessage", "browserjs"];
+	const descriptors = fields.map((field) => Object.getOwnPropertyDescriptor(window, field));
+	const messages: Record<string, unknown>[] = [];
+	const frames = [{ frameId: 12, parentFrameId: 0, url: "https://checkout.test/" }];
+	let fail = false;
+	Object.defineProperty(window, "sendRuntimeMessage", {
+		configurable: true,
+		value: async (message: Record<string, unknown>) => {
+			messages.push(message);
+			return fail
+				? { success: false, error: "Cannot access frame" }
+				: { success: true, result: message.type === "browser-js-frames" ? frames : "done" };
+		},
+	});
+	try {
+		const provider = new BrowserJsRuntimeProvider([]);
+		new Function(`(${provider.getRuntime().toString()})("frame-test")`)();
+		const browserjs = (window as unknown as { browserjs: BrowserJsHelper }).browserjs;
+		equal(await browserjs.frames(), frames, "frame discovery returns metadata");
+		equal(messages[0], { type: "browser-js-frames" }, "discovery uses a dedicated message");
+		const func = (selector: string, value: { text: string }) => ({ selector, text: value.text });
+		equal(await browserjs.inFrame(12, func, "button", { text: "Submit" }), "done", "frame result returned");
+		equal(
+			messages[1],
+			{
+				type: "browser-js",
+				code: func.toString(),
+				args: '["button",{"text":"Submit"}]',
+				frameId: 12,
+			},
+			"frame calls serialize the function and arguments",
+		);
+		await browserjs(() => document.title);
+		equal(messages[2].frameId, 0, "ordinary calls do not inherit the last frame");
+		fail = true;
+		for (const call of [() => browserjs.frames(), () => browserjs.inFrame(12, () => document.title)]) {
+			let error: unknown;
+			try {
+				await call();
+			} catch (caught) {
+				error = caught;
+			}
+			assert(String(error).includes("Cannot access frame"), "helper surfaces backend errors");
+		}
+	} finally {
+		fields.forEach((field, index) => {
+			const descriptor = descriptors[index];
+			if (descriptor) Object.defineProperty(window, field, descriptor);
+			else Reflect.deleteProperty(window, field);
+		});
+	}
+});
+
+test("browser tools stay on their target across tab, frame, and window switches", async () => {
 	const originalChrome = globalThis.chrome;
 	const tabs = new Map<number, chrome.tabs.Tab>();
 	const makeTab = (id: number, windowId: number, active: boolean): chrome.tabs.Tab => ({
@@ -752,6 +810,21 @@ test("browser tools stay on their target across tab and window switches", async 
 	let focusedWindow = 10;
 	let createdWith: chrome.tabs.CreateProperties | undefined;
 	const scriptTargets: number[] = [];
+	const injections: chrome.userScripts.UserScriptInjection[] = [];
+	const frames = [
+		{ frameId: 0, parentFrameId: -1, url: "https://example.test/same-url" },
+		{ frameId: 12, parentFrameId: 0, url: "https://checkout.test/" },
+		{ frameId: 15, parentFrameId: 12, url: "https://nested.test/" },
+	];
+	let frameDiscoveryError = false;
+	let injectionFailure: "throw" | "result" | "empty" | undefined;
+	const skillUrls: string[] = [];
+	const skills = getSitegeistStorage().skills;
+	const originalGetSkills = skills.getSkillsForUrl;
+	skills.getSkillsForUrl = async (url) => {
+		skillUrls.push(url);
+		return [];
+	};
 	const nativeTargets: number[] = [];
 	const listeners = new Set<(event: { tabId: number; frameId: number; url: string }) => void>();
 	Object.defineProperty(globalThis, "chrome", {
@@ -801,6 +874,15 @@ test("browser tools stay on their target across tab and window switches", async 
 				},
 			},
 			webNavigation: {
+				getFrame: async ({ tabId, frameId }: { tabId: number; frameId: number }) => {
+					equal(tabId, 1, "frame lookup stays on the working target");
+					return frames.find((frame) => frame.frameId === frameId) ?? null;
+				},
+				getAllFrames: async ({ tabId }: { tabId: number }) => {
+					equal(tabId, 1, "frame discovery stays on the working target");
+					if (frameDiscoveryError) throw new Error("Frame discovery failed");
+					return frames;
+				},
 				onErrorOccurred: { addListener: () => {}, removeListener: () => {} },
 				onDOMContentLoaded: {
 					addListener: (listener: typeof listeners extends Set<infer T> ? T : never) => listeners.add(listener),
@@ -810,9 +892,15 @@ test("browser tools stay on their target across tab and window switches", async 
 			},
 			userScripts: {
 				configureWorld: async () => {},
-				execute: async (config: { target: { tabId: number } }) => {
+				execute: async (config: chrome.userScripts.UserScriptInjection) => {
 					scriptTargets.push(config.target.tabId);
-					return [{ result: { success: true, lastValue: "done" } }];
+					injections.push(config);
+					if (injectionFailure === "throw") throw new Error("Cannot access contents of frame");
+					if (injectionFailure === "empty") return [];
+					const [frameId] = config.target.frameIds!;
+					return injectionFailure === "result"
+						? [{ frameId, error: "Frame injection failed" }]
+						: [{ frameId, result: { success: true, lastValue: "done" } }];
 				},
 			},
 			debugger: {
@@ -841,11 +929,67 @@ test("browser tools stay on their target across tab and window switches", async 
 		tabs.get(1)!.active = false;
 		const browserJs = new BrowserJsRuntimeProvider([]);
 		let response: unknown;
-		await browserJs.handleMessage({ type: "browser-js", code: "() => document.title" }, (value) => {
-			response = value;
-		});
+		await browserJs.handleMessage(
+			{ type: "browser-js", frameId: 0, code: "() => document.title", args: "[]" },
+			(value) => {
+				response = value;
+			},
+		);
 		assert(JSON.stringify(response).includes("done"), "page script completed");
 		equal(scriptTargets, [1], "page script uses target");
+		const sendBrowserMessage = async (message: Record<string, unknown>) => {
+			let result: { success: boolean; result?: unknown; error?: string } | undefined;
+			await browserJs.handleMessage({ args: "[]", ...message }, (value) => {
+				result = value;
+			});
+			assert(result, "browser helper returned a response");
+			return result;
+		};
+		const discovered = await sendBrowserMessage({ type: "browser-js-frames" });
+		equal(
+			discovered,
+			{ success: true, result: frames },
+			"discovery includes top-level, cross-origin, and nested frames",
+		);
+		equal(injections.length, 1, "frame discovery does not inject code");
+		for (const frameId of [12, 15, 0]) {
+			const result = await sendBrowserMessage({ type: "browser-js", frameId, code: "() => document.title" });
+			equal(result.result, "done", "selected frame result returned");
+			equal(injections.at(-1)?.target, { tabId: 1, frameIds: [frameId] }, "only the selected frame receives code");
+		}
+		equal(
+			skillUrls,
+			[frames[0].url, frames[1].url, frames[2].url, frames[0].url],
+			"skills match the selected document URL",
+		);
+		equal(browserTarget.tabId, 1, "frame calls leave the working tab unchanged");
+		await sendBrowserMessage({ type: "browser-js", frameId: 0, code: "() => document.title" });
+		equal(
+			injections.at(-1)?.target,
+			{ tabId: 1, frameIds: [0] },
+			"ordinary calls still target the top-level document",
+		);
+		const beforeInvalidCalls = injections.length;
+		for (const frameId of [-1, 1.5, Number.NaN, undefined, null, "12", 99]) {
+			const result = await sendBrowserMessage({ type: "browser-js", frameId, code: "() => document.title" });
+			assert(!result.success && result.error, "invalid or disappeared frames return an error");
+			if (frameId === 99) assert(result.error.includes("browserjs.frames()"), "missing frames request rediscovery");
+		}
+		equal(injections.length, beforeInvalidCalls, "invalid frames never execute in another document");
+		frameDiscoveryError = true;
+		const discoveryFailure = await sendBrowserMessage({ type: "browser-js-frames" });
+		assert(
+			!discoveryFailure.success && discoveryFailure.error?.includes("Frame discovery failed"),
+			"discovery failures surfaced",
+		);
+		frameDiscoveryError = false;
+		for (const failure of ["throw", "result", "empty"] as const) {
+			injectionFailure = failure;
+			const result = await sendBrowserMessage({ type: "browser-js", frameId: 12, code: "() => document.title" });
+			assert(!result.success && result.error, "injection errors and missing results are failures");
+			if (failure === "result") equal(result.error, "Frame injection failed", "Chrome injection error preserved");
+		}
+		injectionFailure = undefined;
 		await new NativeInputEventsRuntimeProvider().handleMessage(
 			{ type: "native-input", action: "press", key: "Enter" },
 			() => {},
@@ -930,6 +1074,7 @@ test("browser tools stay on their target across tab and window switches", async 
 		assert(String(error).includes("no longer available"), "closed target reported instead of changing tabs");
 		browserJs.cleanupAll();
 	} finally {
+		skills.getSkillsForUrl = originalGetSkills;
 		Object.defineProperty(globalThis, "chrome", { configurable: true, value: originalChrome });
 	}
 });

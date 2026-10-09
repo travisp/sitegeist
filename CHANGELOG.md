@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `browserjs.frames()` for frame discovery and `browserjs.inFrame()` for targeted iframe DOM automation, including cross-origin frames permitted by Chrome.
 - Added live artifact viewer tabs that can move between windows, reuse existing viewers, and load saved files without starting another agent. HTML app updates require an explicit reload.
 
 - Added window-scoped browser working targets: automation selects its tabs within the sidebar's window without focusing that window or accessing tabs in other windows.
@@ -18,6 +19,7 @@
 
 ### Changed
 
+- Simplified browser script execution and frame handling; removed unused execution bookkeeping, wrapper options, and compatibility paths.
 - New artifacts no longer automatically cover the conversation. The artifact list and tool results offer Open in tab; sidebar previews remain available on demand.
 - Separated artifact rendering, snapshot-only HTML access, live connections, and reading-position restoration; consolidated file errors and replayed saved artifacts in a single pass.
 - Consolidated working-window validation and tab selection; navigation results stay bound to the tab that was navigated.

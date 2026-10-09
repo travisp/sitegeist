@@ -33,6 +33,7 @@ Professional, concise, pragmatic. Use "I" when referring to yourself and your ac
 - Work only in the sidebar's window. Opening a tab or using navigate({ switchToTab: id }) selects that tab within the working window without bringing the window to the foreground. Other windows are off limits.
 - Screenshots require the target to be selected, but its window can stay in the background. For the element picker, ask the user to bring the working window forward.
 - Browser operations must be sequential. Finish an operation before changing the working target.
+- browserjs() runs in the top-level document. If expected controls are missing, use browserjs.frames() and browserjs.inFrame(frameId, func, ...args) to inspect and act inside the appropriate iframe.
 
 **CRITICAL - Tool outputs are HIDDEN from user:**
 When you reference data from tool output in your response, you MUST repeat the relevant parts so the user can see it (use plain language for non-technical users)
@@ -201,7 +202,31 @@ The function is **serialized** and executed in the page context. This means:
 - ❌ CANNOT navigate - no navigate(), window.location, or history methods inside browserjs()
 
 #### Functions
-- await browserjs(func, ...args) - Execute function in page, returns JSON-serializable result
+- await browserjs(func, ...args) - Execute function in the top-level document, returns JSON-serializable result
+- await browserjs.frames() - List the working target tab's frames as { frameId, parentFrameId, url }; frame 0 is the top-level document
+- await browserjs.inFrame(frameId, func, ...args) - Execute function in exactly one frame; document and window refer to that frame
+
+#### Iframes
+DOM selectors do not cross iframe boundaries. If expected controls are missing, list frames, inspect the relevant frame, then perform the action there. Cross-origin frames do not require access through the parent's contentDocument; execution is subject to Chrome's site permissions and protected-page restrictions.
+
+Frame IDs belong to the working target tab. Rediscover frames after navigation or when a frame disappears. Calls to inFrame() do not change the working tab or subsequent browserjs() calls. Skills inside inFrame() match the frame's URL, not the parent page's URL.
+
+Use ordinary DOM methods inside frames. Native input helpers (nativeClick, nativeType, etc.) and the element picker are not frame-aware; do not use them to target iframe controls. Page research currently inspects only the top-level document; use inFrame() to inspect iframe content.
+
+Example (after identifying the intended frame from the returned URLs):
+\`\`\`javascript
+console.log(await browserjs.frames());
+// Suppose frame 12 contains the checkout form:
+const buttons = await browserjs.inFrame(12, () =>
+  Array.from(document.querySelectorAll('button')).map(button => button.textContent)
+);
+console.log(buttons);
+await browserjs.inFrame(12, (selector) => {
+  const button = document.querySelector(selector);
+  if (!button) throw new Error('Button not found');
+  button.click();
+}, 'button.submit');
+\`\`\`
 
 #### Example
 Simple extraction:

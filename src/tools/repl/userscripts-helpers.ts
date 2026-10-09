@@ -235,21 +235,17 @@ async function wrapperFunction() {
 }
 
 /**
- * Build the wrapper code by combining safeguards, skill library, providers, and user code
+ * Build a page script with runtime providers, matching skills, and serialized arguments.
  */
 export function buildWrapperCode(
 	userCode: string,
 	skillLibrary: string,
-	_enableSafeguards: boolean,
 	providers: SandboxRuntimeProvider[],
 	sandboxId: string,
-	args?: any[],
+	args: unknown[],
 ): string {
 	// Start with wrapper function
 	let code = `(${wrapperFunction.toString()})`;
-
-	// Inject safeguards at the beginning if enabled (not implemented yet)
-	// if (enableSafeguards) { ... }
 
 	// Build provider injections (bridge + data + runtimes)
 	const bridgeCode = RuntimeMessageBridge.generateBridgeCode({
@@ -285,16 +281,12 @@ export function buildWrapperCode(
 	// Replace the string literal marker with our injections
 	code = code.replace(/"__INJECT_PROVIDERS_HERE__";/, providerInjections);
 
-	// If args are provided, inject them before user code
-	if (args && args.length > 0) {
-		// Wrap user code with argument injection
-		const argsCode = `const __args__ = ${JSON.stringify(args)};\n`;
-		const wrappedUserCode = `${argsCode}const __func__ = ${userCode};\nreturn __func__(...__args__);`;
-		code = code.replace(/USER_CODE_PLACEHOLDER/, `async () => { ${wrappedUserCode} }`);
-	} else {
-		// No args - just wrap user code
-		code = code.replace(/USER_CODE_PLACEHOLDER/, userCode);
-	}
+	// Even zero-argument functions use the same execution path.
+	const wrappedUserCode = `async () => {
+		const func = ${userCode};
+		return func(...${JSON.stringify(args)});
+	}`;
+	code = code.replace(/USER_CODE_PLACEHOLDER/, wrappedUserCode);
 
 	// Call the function immediately
 	return `${code}()`;
